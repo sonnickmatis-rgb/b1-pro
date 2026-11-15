@@ -177,6 +177,18 @@ input:focus, textarea:focus, select:focus { box-shadow: 0 0 0 2px var(--sage); }
 .list-item { padding: 12px 0; border-top: 1px solid var(--line); }
 .list-item:first-child { border-top: 0; }
 
+/* Correction */
+.check-res { border-radius: 16px; padding: 12px 14px; margin-top: 14px; font-size: 14px; }
+.check-res.v-ok, .check-res.v-typo { background: var(--sage-soft); color: var(--sage-ink); }
+.check-res.v-close { background: #F7E7C3; color: #5a4208; }
+.check-res.v-wrong { background: #F3D7CD; color: #6d2412; }
+.back .miss { background: rgba(216,115,91,.35); border-radius: 6px; padding: 0 3px; }
+.back .typo { background: rgba(232,180,76,.45); border-radius: 6px; padding: 0 3px; }
+.back .acc { text-decoration: underline wavy rgba(36,48,15,.6); text-underline-offset: 4px; }
+.rate button.sugg { box-shadow: 0 0 0 2px var(--ink); }
+.rec-live { background: var(--bad) !important; color: #fff !important; animation: pulse 1.4s infinite; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .check-res.v-ok, :root:not([data-theme="light"]) .check-res.v-typo { color: var(--ink); } }
+
 /* Drill */
 .drill-src { font-size: 15px; color: var(--ink2); }
 .drill-q { font-size: 24px; line-height: 1.25; letter-spacing: -.02em; font-weight: 650; margin: 10px 0; }

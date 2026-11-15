@@ -34,6 +34,16 @@ if (!S.cards.length && !S.seeded) {
   S.cards = SEED_CARDS.map((c, i) => ({ id: uid(), fr: c.fr, es: c.es, tag: c.tag, due: null, iv: 0, ef: 2.5, reps: 0, mine: false, added: START, ord: i }));
   S.seeded = true;
 }
+// Pack de cartes par mois : ajouté une seule fois, débloqué selon le mois du programme
+(() => {
+  const have = new Set(S.cards.map(c => c.pk).filter(Boolean));
+  (window.PACK || []).forEach(([m, txt]) => txt.trim().split('\n').forEach((l, i) => {
+    const pk = m + '-' + i; if (have.has(pk)) return;
+    const [fr, es, tag] = l.split('|'); if (!es) return;
+    S.cards.push({ id: uid(), pk, m, fr, es, tag, due: null, iv: 0, ef: 2.5, reps: 0, mine: false, added: START, ord: m * 1000 + i });
+  }));
+})();
+S.settings = Object.assign({ cardMode: 'oral', cardDir: 'fr', drillMode: 'oral' }, S.settings);
 let saveT;
 function save() { clearTimeout(saveT); saveT = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Sauvegarde impossible'); } }, 120); }
 
@@ -149,7 +159,8 @@ const log = d => (S.cardLog[d] ||= { rev: 0, new: 0 });
 const dueCards = () => S.cards.filter(c => c.due && c.due <= today());
 function newCards() {
   const left = Math.max(0, S.settings.newPerDay - (S.cardLog[today()]?.new || 0));
-  return S.cards.filter(c => !c.due).sort((a, b) => (b.mine - a.mine) || (a.ord ?? 1e9) - (b.ord ?? 1e9) || a.added.localeCompare(b.added)).slice(0, left);
+  const mNow = monthOf(today()).id;
+  return S.cards.filter(c => !c.due && (!c.m || c.m <= mNow)).sort((a, b) => (b.mine - a.mine) || (a.ord ?? 1e9) - (b.ord ?? 1e9) || a.added.localeCompare(b.added)).slice(0, left);
 }
 function rateCard(c, q) {
   const td = today();
@@ -182,6 +193,102 @@ function speak(text) {
   speechSynthesis.speak(u);
 }
 
+// ---------- Correction souple ----------
+const stripAcc = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '');
+const normTxt = (s, keepAcc) => { s = String(s || '').toLowerCase().replace(/[’`']/g, ' '); if (!keepAcc) s = stripAcc(s); return s.replace(/[¿¡.,;:!?«»"()…—–\-\/]/g, ' ').replace(/\s+/g, ' ').trim(); };
+// Terminaison grammaticale différente (trabajo/trabajé, hablas/hablan) : vraie faute, pas de frappe
+const endingErr = (u, r) => { const a = u.slice(-1), b = r.slice(-1); return a !== b && /[aeiosnm]/.test(a) && /[aeiosnm]/.test(b); };
+function lev(a, b) {
+  if (a === b) return 0; if (!a.length) return b.length; if (!b.length) return a.length;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
+}
+// Compare une réponse à la référence. verdict : ok | typo (compté juste) | close | wrong
+function checkAnswer(user, refFull) {
+  const refs = refFull.split(' / ');
+  let best = null;
+  for (const ref of refs) {
+    const a = normTxt(user), b = normTxt(ref);
+    const sim = a === b ? 1 : 1 - lev(a, b) / Math.max(a.length, b.length, 1);
+    if (!best || sim > best.sim) best = { ref, a, b, sim };
+  }
+  const { ref, sim } = best;
+  const accentsOk = normTxt(user, true) === normTxt(ref, true);
+  let verdict = sim === 1 ? 'ok' : sim >= 0.9 ? 'typo' : sim >= 0.7 ? 'close' : 'wrong';
+  // Diff mot à mot sur la référence
+  const R = ref.replace(/(['’])/g, '$1 ').split(/\s+/).filter(Boolean), Rn = R.map(w => normTxt(w)), U = normTxt(user).split(' ').filter(Boolean);
+  const n = Rn.length, m = U.length, L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = Rn[i] && Rn[i] === U[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const hitR = new Set(), hitU = new Set(); let i = 0, j = 0;
+  while (i < n && j < m) { if (Rn[i] && Rn[i] === U[j]) { hitR.add(i); hitU.add(j); i++; j++; } else if (L[i + 1][j] >= L[i][j + 1]) i++; else j++; }
+  const freeU = U.filter((_, k) => !hitU.has(k));
+  let realErr = false;
+  const html = R.map((w, k) => {
+    if (!Rn[k] || hitR.has(k)) return !accentsOk && /[áéíóúñüàèùâêîôûçëï]/i.test(w) ? `<span class="acc">${esc(w)}</span>` : esc(w);
+    const near = Rn[k].length >= 3 && freeU.find(u => lev(u, Rn[k]) <= Math.max(1, Math.floor(Rn[k].length / 4)));
+    // Une terminaison différente (trabajo / trabajé) est une vraie faute de grammaire, pas de frappe
+    const isTypo = near && !endingErr(near, Rn[k]);
+    if (!isTypo) realErr = true;
+    return `<span class="${isTypo ? 'typo' : 'miss'}">${esc(w)}</span>`;
+  }).join(' ').replace(/(&#39;|’)(<\/span>)? /g, '$1$2');
+  if (verdict === 'typo' && realErr) verdict = 'close';
+  return { verdict, sim, accentsOk, html, ref };
+}
+function checkForm(user, form) {
+  const a = normTxt(user), b = normTxt(form);
+  if (normTxt(user, true) === normTxt(form, true)) return { verdict: 'ok', accentsOk: true };
+  if (a === b) return { verdict: 'ok', accentsOk: false };
+  if (b.length > 5 && lev(a, b) <= 1 && a.slice(-1) === b.slice(-1)) return { verdict: 'typo', accentsOk: true };
+  return { verdict: 'wrong' };
+}
+const VERDICT = () => langStage() >= 2
+  ? { ok: '¡Correcto!', typo: 'Casi perfecto: error de dedo, cuenta como correcto', close: 'Casi: revisa las palabras marcadas', wrong: 'Todavía no: mira la respuesta' }
+  : { ok: 'Juste !', typo: 'Presque parfait : faute de frappe, ça compte juste', close: 'Pas loin : regarde les mots surlignés', wrong: 'Pas encore : regarde la réponse' };
+const SUGGEST = { ok: 2, typo: 2, close: 1, wrong: 0 };
+
+// ---------- Reconnaissance vocale ----------
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const canListen = !!SR;
+let rec1 = null;
+function listenOnce(lang, onText) {
+  if (!SR) return toast(langStage() >= 2 ? 'Reconocimiento de voz no disponible' : 'Reconnaissance vocale indisponible sur ce navigateur');
+  try { rec1?.abort(); } catch (e) {}
+  const r = new SR(); rec1 = r;
+  r.lang = lang; r.interimResults = false; r.maxAlternatives = 3; r.continuous = false;
+  ui.listening = true; render();
+  r.onresult = e => { const alts = [...e.results[0]].map(x => x.transcript); onText(alts); };
+  r.onerror = e => { if (e.error === 'not-allowed') toast(t('mic_err')); else if (e.error === 'no-speech') toast(langStage() >= 2 ? 'No te escuché' : 'Je ne t\'ai pas entendu'); };
+  r.onend = () => { ui.listening = false; rec1 = null; render(); };
+  try { r.start(); } catch (e) { ui.listening = false; }
+}
+// Transcription continue pendant le vocal de 2 min
+function startTranscript(state) {
+  if (!SR) return;
+  state.text = []; state.live = true;
+  const go = () => {
+    if (!state.live) return;
+    const r = new SR(); state.sr = r;
+    r.lang = 'es-MX'; r.continuous = true; r.interimResults = true;
+    r.onresult = e => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) state.text.push(e.results[i][0].transcript.trim()); else interim += e.results[i][0].transcript;
+      }
+      const el = document.querySelector('#liveTx'); if (el) el.textContent = (state.text.join(' ') + ' ' + interim).trim();
+    };
+    r.onerror = e => { if (e.error === 'not-allowed' || e.error === 'service-not-allowed') state.live = false; };
+    r.onend = () => { if (state.live) setTimeout(go, 150); };
+    try { r.start(); } catch (e) { state.live = false; }
+  };
+  go();
+}
+function stopTranscript(state) { if (!state) return ''; state.live = false; try { state.sr?.stop(); } catch (e) {} return (state.text || []).join(' ').replace(/\s+/g, ' ').trim(); }
+
 // ---------- IndexedDB (vocaux) ----------
 const idb = (() => {
   let dbp;
@@ -202,6 +309,8 @@ function render() {
   const v = { today: vToday, cards: vCards, practice: vPractice, plan: vPlan, progress: vProgress }[ui.tab]();
   $('#app').innerHTML = v + tabbar();
   renderTimer();
+  if (ui.tab === 'cards' && ui.review && !ui.review.flip && S.settings.cardMode === 'type') $('#ansIn')?.focus();
+  if (ui.tab === 'practice' && ui.sub.practice === 'drill' && ui.drill && !ui.drill.shown && S.settings.drillMode === 'type') $('#drillIn')?.focus();
   document.documentElement.dataset.theme = S.settings.theme === 'auto' ? '' : S.settings.theme;
   if (!document.documentElement.dataset.theme) delete document.documentElement.dataset.theme;
 }
@@ -314,22 +423,50 @@ function vCards() {
       <div class="small" style="color:var(--ink3);margin-top:2px">${c.due ? (c.due <= today() ? (langStage() >= 2 ? 'para hoy' : 'à revoir') : (langStage() >= 2 ? 'próximo: ' : 'prochaine : ') + c.due) : (langStage() >= 2 ? 'nueva' : 'nouvelle')}</div></button>`).join('') || `<div class="empty">—</div>`}</div>
   </section>`;
 }
+function cardDirFor(r) {
+  r.dirs ||= {};
+  if (!r.dirs[r.i]) { const d = S.settings.cardDir; r.dirs[r.i] = d === 'mix' ? (Math.random() < 0.6 ? 'fr' : 'es') : d; }
+  return r.dirs[r.i];
+}
+function gradeCard(r) {
+  const c = r.queue[r.i], ref = cardDirFor(r) === 'fr' ? c.es : c.fr;
+  r.res = checkAnswer(r.typed, ref); r.flip = true;
+}
 function vReview() {
   const r = ui.review;
   if (r.i >= r.queue.length) {
     return `<div style="padding-top:calc(16px + env(safe-area-inset-top))"></div><section class="block"><h2>${t('session_done')}</h2><p class="muted">${r.count} ${langStage() >= 2 ? 'tarjetas repasadas.' : 'cartes révisées.'} ${langStage() >= 3 ? '¡Hasta mañana!' : 'À demain !'}</p><button class="btn" data-a="endReview">OK</button></section>`;
   }
-  const c = r.queue[r.i];
+  const c = r.queue[r.i], st = S.settings, L = langStage() >= 2;
+  const toEs = cardDirFor(r) === 'fr';
+  const q = toEs ? c.fr : c.es, a = toEs ? c.es : c.fr;
+  const mode = st.cardMode;
+  const res = r.res;
+  const modes = [['oral', L ? 'Oral' : 'Oral'], ['type', L ? 'Escrito' : 'Écrit'], ...(canListen ? [['voice', L ? 'Voz' : 'Voix']] : [])];
+  const dirs = [['fr', 'FR → ES'], ['es', 'ES → FR'], ['mix', L ? 'Mezcla' : 'Mixte']];
   return `<div style="padding-top:calc(14px + env(safe-area-inset-top))"></div>
   <section class="block">
-    <div class="row between" style="margin-bottom:14px"><button class="icon-btn" data-a="endReview">${I.x}</button><span class="small muted">${r.i + 1} / ${r.queue.length}</span><span class="tag" style="background:var(--soft)">${c.due ? esc(c.tag) : '✦ ' + t('new_cards').replace(/s$/, '')}</span></div>
-    <div class="fc">
-      <div><p class="eyebrow">Français</p><div class="front">${esc(c.fr)}</div>
-      ${r.flip ? `<div class="back">${esc(c.es)}</div>` : ''}</div>
-      <div class="row between" style="margin-top:16px">${r.flip ? `<button class="btn ghost sm" data-a="speak" data-v="${esc(c.es)}">${I.speak} Escuchar</button>` : `<span class="small muted">${langStage() >= 3 ? 'Dila en voz alta antes de girar.' : 'Dis-la à voix haute avant de retourner.'}</span>`}</div>
+    <div class="row between" style="margin-bottom:12px"><button class="icon-btn" data-a="endReview">${I.x}</button><span class="small muted">${r.i + 1} / ${r.queue.length}</span><span class="tag" style="background:var(--soft)">${c.due ? esc(c.tag) : '✦ ' + t('new_cards').replace(/s$/, '')}</span></div>
+    <div class="row between wrap" style="margin-bottom:12px;gap:6px">
+      <div class="chips">${modes.map(([k, l]) => `<button class="chip ${mode === k ? 'on' : ''}" data-a="cardMode" data-v="${k}">${l}</button>`).join('')}</div>
+      <div class="chips">${dirs.map(([k, l]) => `<button class="chip ${st.cardDir === k ? 'on' : ''}" data-a="cardDir" data-v="${k}">${l}</button>`).join('')}</div>
     </div>
-    ${r.flip ? `<div class="rate">${[0, 1, 2, 3].map(q => `<button class="r${q}" data-a="rate" data-v="${q}">${t(['again', 'hard', 'good', 'easy'][q])}<small>${ivLabel(c, q)}</small></button>`).join('')}</div>`
-      : `<button class="btn block-w" style="margin-top:12px;padding:15px" data-a="flip">${t('show')}</button>`}
+    <div class="fc">
+      <div><p class="eyebrow">${toEs ? 'Français' : 'Español'}</p><div class="front">${esc(q)}</div>
+      ${!toEs && !r.flip ? `<button class="btn ghost sm" style="margin-top:10px" data-a="speak" data-v="${esc(c.es)}">${I.speak} Escuchar</button>` : ''}
+      ${r.flip ? (res ? `<div class="check-res v-${res.verdict}"><b>${VERDICT()[res.verdict]}</b>${res.verdict === 'ok' && !res.accentsOk ? `<div class="small">${L ? 'Ojo con los acentos.' : 'Attention aux accents.'}</div>` : ''}
+          <div class="small" style="margin-top:6px;opacity:.75">${L ? 'Tu respuesta' : 'Ta réponse'} : ${esc(r.typed || '—')}</div></div>
+          <div class="back">${res.html}</div>` : `<div class="back">${esc(a)}</div>`) : ''}</div>
+      ${!r.flip && mode !== 'oral' ? `<div class="gap-l">
+          <div class="row"><input type="text" id="ansIn" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${toEs ? 'Escribe en español…' : 'Écris en français…'}" value="${esc(r.typed || '')}">
+          ${canListen ? `<button class="icon-btn ${ui.listening ? 'rec-live' : ''}" data-a="listenCard">${I.mic}</button>` : ''}</div>
+          ${mode === 'voice' && canListen ? `<p class="small muted" style="margin:8px 2px 0">${ui.listening ? (L ? 'Te escucho…' : 'Je t\'écoute…') : (L ? 'Toca el micrófono y di la frase.' : 'Touche le micro et dis la phrase.')}</p>` : ''}
+        </div>` : ''}
+      <div class="row between" style="margin-top:16px">${r.flip ? `<button class="btn ghost sm" data-a="speak" data-v="${esc(c.es)}">${I.speak} Escuchar</button>` : mode === 'oral' ? `<span class="small muted">${langStage() >= 3 ? 'Dila en voz alta antes de girar.' : 'Dis-la à voix haute avant de retourner.'}</span>` : ''}</div>
+    </div>
+    ${r.flip ? `<div class="rate">${[0, 1, 2, 3].map(k => `<button class="r${k} ${res && SUGGEST[res.verdict] === k ? 'sugg' : ''}" data-a="rate" data-v="${k}">${t(['again', 'hard', 'good', 'easy'][k])}<small>${ivLabel(c, k)}</small></button>`).join('')}</div>`
+      : mode === 'oral' ? `<button class="btn block-w" style="margin-top:12px;padding:15px" data-a="flip">${t('show')}</button>`
+      : `<div class="row" style="margin-top:12px"><button class="btn ghost" data-a="flip">${L ? 'No sé' : 'Je ne sais pas'}</button><button class="btn grow" style="padding:15px" data-a="checkCard">${t('check')}</button></div>`}
   </section>`;
 }
 
@@ -344,7 +481,7 @@ function newDrill() {
   const m = monthOf(today());
   const d = ui.drill || { tenses: m.tenses.slice(), n: 0, table: false };
   const [inf, comp] = rnd(VERBS), p = Math.floor(Math.random() * 5), tense = rnd(d.tenses);
-  ui.drill = { ...d, inf, comp, p, tense, shown: false };
+  ui.drill = { ...d, inf, comp, p, tense, shown: false, res: null, said: '' };
 }
 function sentence(inf, comp, p, tense) {
   const pr = `<span class="pr">(${PERSONS[p]})</span>`;
@@ -359,7 +496,10 @@ function vDrill() {
   const src = d.tense === 'presente' ? `<b>${d.inf}</b> ${esc(d.comp)} · <span class="pr">${PERSONS[d.p]}</span>` : `Hoy <span class="pr">(${PERSONS[d.p]})</span> <b>${conj(d.inf, 'presente', d.p)}</b> ${esc(d.comp)}.`;
   const s = sentence(d.inf, d.comp, d.p, d.tense);
   const allT = ['presente', 'proximo', 'indefinido', 'imperfecto', 'futuro', 'condicional', 'subjuntivo'];
+  const dm = S.settings.drillMode === 'voice' && !canListen ? 'oral' : S.settings.drillMode;
+  const L2 = langStage() >= 2;
   return `
+  <div class="chips" style="margin-bottom:10px">${[['oral', 'Oral'], ['type', L2 ? 'Escrito' : 'Écrit'], ...(canListen ? [['voice', L2 ? 'Voz' : 'Voix']] : [])].map(([k, l]) => `<button class="chip ${dm === k ? 'on' : ''}" style="${dm === k ? 'background:var(--sage);color:var(--sage-ink)' : ''}" data-a="drillMode" data-v="${k}">${l}</button>`).join('')}</div>
   <div class="chips" style="margin-bottom:16px">${allT.map(x => `<button class="chip ${d.tenses.includes(x) ? 'on' : ''}" data-a="drillTense" data-v="${x}">${TENSES[x].label}</button>`).join('')}</div>
   <div class="soft" style="padding:20px">
     <div class="row between"><span class="tag">${TENSES[d.tense].label} · ${esc(v[2])}</span><div class="dots">${[0, 1, 2, 3, 4].map(i => `<i class="${i < d.n % 5 || (d.n && d.n % 5 === 0) ? 'on' : ''}"></i>`).join('')}</div></div>
@@ -367,8 +507,13 @@ function vDrill() {
     <div class="drill-q">${d.shown ? esc(s.a) : s.q}</div>
     <p class="small muted" style="margin:0">${t('drill_hint')}</p>
   </div>
+  ${d.shown && d.res ? `<div class="check-res v-${d.res.verdict} gap-l"><b>${VERDICT()[d.res.verdict]}</b>${d.res.verdict === 'ok' && d.res.accentsOk === false ? `<div class="small">${langStage() >= 2 ? 'Ojo con el acento' : 'Attention à l\'accent'} : <b>${esc(conj(d.inf, d.tense, d.p))}</b></div>` : ''}<div class="small" style="margin-top:4px;opacity:.75">${langStage() >= 2 ? 'Tu respuesta' : 'Ta réponse'} : ${esc(d.said || '—')}</div></div>` : ''}
+  ${!d.shown && dm !== 'oral' ? `<div class="row gap-l">${dm === 'type' ? `<input type="text" id="drillIn" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${langStage() >= 2 ? 'Escribe el verbo…' : 'Écris le verbe conjugué…'}" value="${esc(d.said || '')}">` : `<span class="grow small muted">${ui.listening ? (langStage() >= 2 ? 'Te escucho…' : 'Je t\'écoute…') : (langStage() >= 2 ? 'Di la frase completa.' : 'Dis la phrase complète.')}</span>`}
+      ${canListen ? `<button class="icon-btn ${ui.listening ? 'rec-live' : ''}" data-a="listenDrill">${I.mic}</button>` : ''}</div>` : ''}
   <div class="row gap-l">
-    ${d.shown ? `<button class="btn ghost" data-a="speak" data-v="${esc(s.a)}">${I.speak}</button><button class="btn grow" data-a="drillNext">${t('next')} ${I.arrow}</button>` : `<button class="btn grow" style="padding:14px" data-a="drillShow">${t('check')}</button>`}
+    ${d.shown ? `<button class="btn ghost" data-a="speak" data-v="${esc(s.a)}">${I.speak}</button><button class="btn grow" data-a="drillNext">${t('next')} ${I.arrow}</button>`
+      : dm === 'type' ? `<button class="btn ghost" data-a="drillShow">${langStage() >= 2 ? 'No sé' : 'Je ne sais pas'}</button><button class="btn grow" style="padding:14px" data-a="drillCheck">${t('check')}</button>`
+      : `<button class="btn grow" style="padding:14px" data-a="drillShow">${t('check')}</button>`}
   </div>
   <details class="gap-l" ${d.table ? 'open' : ''}><summary class="row between" data-a="drillTable"><h4 style="margin:0">${t('table')} · ${d.inf} · ${TENSES[d.tense].label}</h4>${I.arrow.replace('<svg', '<svg style="width:16px;transform:rotate(90deg)"')}</summary>
     <table class="conj" style="margin-top:8px">${PERSONS.map((p, i) => `<tr><td>${p}${i === 4 ? ' / ustedes' : i === 2 ? ' / usted' : ''}</td><td><b>${conj(d.inf, d.tense, i)}</b></td></tr>`).join('')}</table>
@@ -385,12 +530,15 @@ function vVocal() {
   <div class="big-time">${r ? fmt(Math.max(0, 120 - r.elapsed)) : '2:00'}</div>
   <button class="rec-btn ${r ? 'on' : ''}" data-a="${r ? 'recStop' : 'recStart'}">${r ? I.stop : I.mic}</button>
   <p class="small muted" style="text-align:center;margin:6px 0 0">${r ? t('stop') : t('start')}</p>
+  ${r && canListen && S.settings.transcribe !== false ? `<div class="soft gap-l"><p class="eyebrow">${langStage() >= 2 ? 'Transcripción en vivo' : 'Transcription en direct'}</p><div id="liveTx" style="min-height:44px">${esc((r.tx.text || []).join(' '))}</div></div>` : ''}
+  ${(() => { const w = VOCALS.filter(v => v.wpm); if (w.length < 2) return ''; const f = w[0], l = w[w.length - 1]; return `<div class="stats gap-l"><div class="stat"><b>${l.nw}</b><span>${langStage() >= 2 ? 'palabras (último)' : 'mots (dernier)'}</span></div><div class="stat"><b>${l.wpm}</b><span>${langStage() >= 2 ? 'palabras/min' : 'mots/min'}</span></div><div class="stat"><b>${l.wpm - f.wpm >= 0 ? '+' : ''}${l.wpm - f.wpm}</b><span>${langStage() >= 2 ? 'vs. el primero' : 'vs. le premier'}</span></div></div>`; })()}
   ${first ? `<hr class="sep"><div class="soft"><p class="eyebrow">${langStage() >= 2 ? 'Audio 0 · para comparar en mayo' : 'Vocal 0 · à comparer en mai'}</p><div class="row"><span class="grow small">${esc(first.date)} · ${fmt(first.dur)}</span><button class="btn sm ghost" data-a="play" data-v="${first.id}">${I.play}</button></div></div>` : ''}
   <hr class="sep">
   <h3>${t('my_vocals')}</h3>
   ${Object.keys(byMonth).length ? Object.keys(byMonth).sort((a, b) => b - a).map(k => `<p class="eyebrow gap-l">${langStage() >= 1 ? 'Mes' : 'Mois'} ${k} · ${byMonth[k].length}</p>${byMonth[k].slice().reverse().map((v, i, arr) => `
-      <div class="list-item row"><div class="grow"><div style="font-weight:600">${esc(parse(v.date).toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' }))} ${i === arr.length - 1 ? `<span class="tag" style="background:var(--sage);color:var(--sage-ink)">${t('reference')}</span>` : ''}</div><div class="small muted">${fmt(v.dur)}${v.words?.length ? ' · ' + esc(v.words.join(', ')) : ''}</div></div>
-      <button class="icon-btn" data-a="play" data-v="${v.id}">${I.play}</button><button class="icon-btn" data-a="vocalDel" data-v="${v.id}">${I.x}</button></div>`).join('')}`).join('') : `<div class="empty">${langStage() >= 2 ? 'Aún no hay audios.' : 'Pas encore de vocal.'}</div>`}
+      <div class="list-item row"><div class="grow"><div style="font-weight:600">${esc(parse(v.date).toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' }))} ${i === arr.length - 1 ? `<span class="tag" style="background:var(--sage);color:var(--sage-ink)">${t('reference')}</span>` : ''}</div><div class="small muted">${fmt(v.dur)}${v.nw ? ` · ${v.nw} ${langStage() >= 2 ? 'palabras' : 'mots'} · ${v.wpm}/min` : ''}${v.words?.length ? ' · ' + esc(v.words.join(', ')) : ''}</div></div>
+      <button class="icon-btn" data-a="play" data-v="${v.id}">${I.play}</button><button class="icon-btn" data-a="vocalDel" data-v="${v.id}">${I.x}</button></div>
+      ${v.tx ? `<details class="small" style="margin:-4px 0 6px"><summary class="muted">${langStage() >= 2 ? 'Ver transcripción' : 'Voir la transcription'}</summary><p style="margin:6px 0 0">${esc(v.tx)}</p></details>` : ''}`).join('')}`).join('') : `<div class="empty">${langStage() >= 2 ? 'Aún no hay audios.' : 'Pas encore de vocal.'}</div>`}
   <div id="player"></div>`;
 }
 function vIntensive() {
@@ -458,7 +606,7 @@ function vApply() {
   ${QUESTIONS.map((q, i) => { const a = S.answers[i] || ''; const o = ui.openQ === i; return `<div class="list-item">
     <button class="row" style="width:100%;text-align:left" data-a="openQ" data-v="${i}"><span class="st ${a.trim() ? 's2' : ''}">${i + 1}</span><span class="grow" style="font-weight:600">${esc(q)}</span></button>
     ${o ? `<div class="stack" style="margin-top:10px"><textarea data-in="ans:${i}" rows="5" placeholder="${langStage() >= 3 ? 'Mi respuesta…' : 'Ma réponse en espagnol…'}">${esc(a)}</textarea>
-      <div class="row"><button class="btn sm ghost" data-a="speak" data-v="${esc(q)}">${I.speak} ${langStage() >= 2 ? 'Escuchar' : 'Écouter'}</button><button class="btn sm" data-a="practiceQ" data-v="${i}">${I.clock} ${langStage() >= 2 ? 'Responder 1 min' : 'Répondre en 1 min'}</button>${a.trim() ? `<button class="btn sm ghost" data-a="speak" data-v="${esc(a)}">${I.play}</button>` : ''}</div></div>` : ''}
+      <div class="row"><button class="btn sm ghost" data-a="speak" data-v="${esc(q)}">${I.speak} ${langStage() >= 2 ? 'Escuchar' : 'Écouter'}</button>${canListen ? `<button class="btn sm ghost ${ui.listening ? 'rec-live' : ''}" data-a="dictate" data-v="${i}">${I.mic} ${langStage() >= 2 ? 'Dictar' : 'Dicter'}</button>` : ''}<button class="btn sm" data-a="practiceQ" data-v="${i}">${I.clock} ${langStage() >= 2 ? 'Responder 1 min' : 'Répondre en 1 min'}</button>${a.trim() ? `<button class="btn sm ghost" data-a="speak" data-v="${esc(a)}">${I.play}</button>` : ''}</div></div>` : ''}
   </div>`; }).join('')}
   <hr class="sep">
   <h3>${langStage() >= 2 ? 'Agencias receptivas' : 'Agences réceptives'} · ${S.agencies.length}/15</h3>
@@ -536,6 +684,7 @@ function vSettings() {
       <option value="fr" ${s.lang === 'fr' ? 'selected' : ''}>Toujours en français</option>
       <option value="es" ${s.lang === 'es' ? 'selected' : ''}>Siempre en español</option></select></label>
     <label class="field"><span>Nouvelles cartes par jour</span><input type="number" min="0" max="40" data-in="set:newPerDay" value="${s.newPerDay}"></label>
+    <label class="field"><span>Transcription des vocaux (reconnaissance vocale)</span><select data-in="set:transcribe"><option value="on" ${s.transcribe !== false ? 'selected' : ''}>Activée${canListen ? '' : ' (indisponible sur ce navigateur)'}</option><option value="off" ${s.transcribe === false ? 'selected' : ''}>Désactivée</option></select></label>
     <label class="field"><span>Thème</span><select data-in="set:theme"><option value="auto" ${s.theme === 'auto' ? 'selected' : ''}>Automatique</option><option value="light" ${s.theme === 'light' ? 'selected' : ''}>Clair</option><option value="dark" ${s.theme === 'dark' ? 'selected' : ''}>Sombre</option></select></label>
   </div>
   <hr class="sep">
@@ -627,9 +776,11 @@ async function recStart() {
   mr.onstop = async () => {
     stream.getTracks().forEach(tr => tr.stop());
     const r = ui.rec; ui.rec = null; clearInterval(r.iv);
+    const tx = stopTranscript(r.tx);
     const dur = Math.min(120, (Date.now() - r.t0) / 1000);
     if (dur < 2) { render(); return; }
-    const v = { id: uid(), date: today(), ts: Date.now(), dur, mime: mr.mimeType, blob: new Blob(chunks, { type: mr.mimeType }), words: [] };
+    const nw = tx ? tx.split(/\s+/).filter(Boolean).length : 0;
+    const v = { id: uid(), date: today(), ts: Date.now(), dur, mime: mr.mimeType, blob: new Blob(chunks, { type: mr.mimeType }), words: [], tx, nw, wpm: nw ? Math.round(nw / (dur / 60)) : 0 };
     try { await idb.put(v); VOCALS.push(v); } catch (e) { toast('Erreur de sauvegarde'); }
     setDone('vocal'); render();
     modal(`<h3>${t('missing_words')}</h3><p class="small muted">${langStage() >= 3 ? 'Irán a «Por convertir en tarjetas».' : 'Ils iront dans « À transformer en cartes » pour demain.'}</p>
@@ -637,7 +788,8 @@ async function recStart() {
       <div class="row gap-l"><button class="btn grow" data-a="saveWords" data-v="${v.id}">${t('save')}</button><button class="btn ghost" data-a="close">${langStage() >= 2 ? 'Omitir' : 'Passer'}</button></div>`);
   };
   mr.start(1000);
-  ui.rec = { mr, t0: Date.now(), elapsed: 0 };
+  ui.rec = { mr, t0: Date.now(), elapsed: 0, tx: {} };
+  if (canListen && S.settings.transcribe !== false) { try { startTranscript(ui.rec.tx); } catch (e) {} }
   ui.rec.iv = setInterval(() => {
     if (!ui.rec) return;
     ui.rec.elapsed = (Date.now() - ui.rec.t0) / 1000;
@@ -680,11 +832,35 @@ const A = {
     ui.review = { queue: q, i: 0, flip: false, count: 0 };
   },
   flip: () => { ui.review.flip = true; },
+  cardMode: v => { S.settings.cardMode = v; save(); },
+  cardDir: v => { S.settings.cardDir = v; if (ui.review?.dirs) delete ui.review.dirs[ui.review.i]; save(); },
+  checkCard: () => { const r = ui.review; r.typed = $('#ansIn')?.value || ''; if (!r.typed.trim()) { toast(langStage() >= 2 ? 'Escribe tu respuesta' : 'Écris ta réponse'); return false; } gradeCard(r); },
+  listenCard: () => {
+    const r = ui.review, toEs = cardDirFor(r) === 'fr', c = r.queue[r.i], ref = toEs ? c.es : c.fr;
+    listenOnce(toEs ? 'es-MX' : 'fr-FR', alts => { r.typed = alts.reduce((b, x) => checkAnswer(x, ref).sim > checkAnswer(b, ref).sim ? x : b); gradeCard(r); render(); });
+    return false;
+  },
+  drillMode: v => { S.settings.drillMode = v; ui.drill.res = null; save(); },
+  drillCheck: () => {
+    const d = ui.drill; d.said = $('#drillIn')?.value || '';
+    if (!d.said.trim()) return false;
+    d.res = checkForm(d.said, conj(d.inf, d.tense, d.p)); d.shown = true;
+  },
+  listenDrill: () => {
+    const d = ui.drill, form = normTxt(conj(d.inf, d.tense, d.p));
+    listenOnce('es-MX', alts => {
+      const hit = alts.find(x => (' ' + normTxt(x) + ' ').includes(' ' + form + ' '));
+      d.said = hit || alts[0];
+      d.res = hit ? { verdict: 'ok', accentsOk: true } : { verdict: 'wrong' };
+      d.shown = true; render();
+    });
+    return false;
+  },
   rate: v => {
     const r = ui.review, c = r.queue[r.i], q = +v;
     rateCard(c, q); r.count++;
     if (q === 0) r.queue.push(c);
-    r.i++; r.flip = false;
+    r.i++; r.flip = false; r.res = null; r.typed = '';
     if (r.i >= r.queue.length) setDone('cards');
   },
   endReview: () => { ui.review = null; },
@@ -725,6 +901,10 @@ const A = {
   openMonth: v => { ui.openMonth = ui.openMonth === +v ? 0 : +v; },
   deliv: v => { S.deliv[v] = ((S.deliv[v] || 0) + 1) % 3; save(); },
   openQ: v => { ui.openQ = ui.openQ === +v ? null : +v; },
+  dictate: v => {
+    listenOnce('es-MX', alts => { const cur = (S.answers[v] || '').trim(); let s = alts[0].trim(); s = s.charAt(0).toUpperCase() + s.slice(1); S.answers[v] = cur ? cur + ' ' + s : s; save(); render(); });
+    return false;
+  },
   practiceQ: v => { speak(QUESTIONS[v]); startTimer(null, 60, '#' + (+v + 1)); return false; },
   agency: v => { const a = S.agencies.find(x => x.id === v); a.status = (a.status + 1) % 5; save(); },
   agencyDel: v => { S.agencies = S.agencies.filter(x => x.id !== v); save(); },
@@ -766,7 +946,7 @@ document.addEventListener('input', e => {
   else if (k.startsWith('ans:')) S.answers[k.slice(4)] = v;
   else if (k.startsWith('bal:')) { const wk = weekKey(today()); (S.weekly[wk] ||= { a: [] }).a[+k.slice(4)] = v; }
   else if (k === 'convoTheme') S.convoTheme[weekKey(today())] = v;
-  else if (k.startsWith('set:')) { const f = k.slice(4); S.settings[f] = f === 'newPerDay' ? Math.max(0, +v || 0) : v; save(); if (e.target.tagName === 'SELECT') render(); return; }
+  else if (k.startsWith('set:')) { const f = k.slice(4); S.settings[f] = f === 'newPerDay' ? Math.max(0, +v || 0) : f === 'transcribe' ? v === 'on' : v; save(); if (e.target.tagName === 'SELECT') render(); return; }
   else return;
   save();
 });
@@ -775,7 +955,13 @@ document.addEventListener('change', e => {
   const f = e.target.files[0]; if (!f) return;
   f.text().then(txt => { const d = JSON.parse(txt); if (!d.cards) throw 0; S = Object.assign(DEFAULT(), d); save(); render(); toast('Importé ✓'); }).catch(() => toast('Fichier invalide'));
 });
+document.addEventListener('input', e => {
+  if (e.target.id === 'ansIn' && ui.review) ui.review.typed = e.target.value;
+  if (e.target.id === 'drillIn' && ui.drill) ui.drill.said = e.target.value;
+});
 document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.id === 'ansIn') { e.preventDefault(); if (A.checkCard() !== false) render(); }
+  if (e.key === 'Enter' && e.target.id === 'drillIn') { e.preventDefault(); if (A.drillCheck() !== false) render(); }
   if (e.key === 'Enter' && e.target.id === 'agIn') { A.agencyAdd(); render(); }
   if (e.key === 'Enter' && (e.target.id === 'errB')) { A.errAdd(); render(); }
 });
