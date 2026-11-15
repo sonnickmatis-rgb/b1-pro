@@ -181,9 +181,16 @@ const ivLabel = (c, q) => {
 
 // ---------- Synthèse vocale ----------
 let esVoice = null;
+// Les voix « gadget » d'iOS (Eddy, Flo, Grandma…) restent muettes dans les applis web : on ne les choisit jamais tout seul.
+const NOVELTY = /Eddy|Flo|Grandma|Grandpa|Reed|Rocko|Sandy|Shelley|Abuel|Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Good News|Jester|Organ|Superstar|Trinoids|Whisper|Wobble|Zarvox|Fred|Junior|Kathy|Ralph/i;
+const GOOD_ES = /Paulina|Juan|Mónica|Monica|Jorge|Diego|Marisol|Angélica|Angelica|Isabela|Carlos|Google español|Microsoft (Dalia|Jorge|Raul|Sabina|Salome|Gonzalo)/i;
 function pickVoice() {
   const vs = speechSynthesis?.getVoices?.() || [];
-  esVoice = vs.find(v => /es[-_](MX|US|419|CO)/i.test(v.lang)) || vs.find(v => /^es/i.test(v.lang)) || null;
+  const want = S?.settings?.voice;
+  if (want) { esVoice = vs.find(v => v.voiceURI === want || v.name === want) || null; return; }
+  const es = vs.filter(v => /^es/i.test(v.lang) && !NOVELTY.test(v.name));
+  // Voix connue et fiable, de préférence latino ; sinon aucune voix imposée (l'appareil choisit sa voix espagnole par défaut)
+  esVoice = es.find(v => GOOD_ES.test(v.name) && /MX|US|419|CO/i.test(v.lang)) || es.find(v => GOOD_ES.test(v.name)) || null;
 }
 if ('speechSynthesis' in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
 // Lecture robuste : sur iPhone, un speak() juste après cancel() est souvent ignoré
@@ -764,6 +771,10 @@ function vVoiceDiag() {
     <div>${ok(isSecureContext)} Connexion sécurisée (https)</div>
     <div>ℹ︎ ${isIOS() ? 'iPhone / iPad' : 'Ordinateur ou Android'} · ${isStandalone() ? 'appli installée (icône)' : 'dans le navigateur'}</div>
   </div>
+  <label class="field" style="margin-bottom:10px"><span>Voix de lecture</span><select data-in="set:voice">
+    <option value="" ${!S.settings.voice ? 'selected' : ''}>Automatique (voix espagnole de l'appareil)</option>
+    ${es.map(v => `<option value="${esc(v.voiceURI)}" ${S.settings.voice === v.voiceURI ? 'selected' : ''}>${esc(v.name)} · ${esc(v.lang)}${NOVELTY.test(v.name) ? ' (gadget, souvent muette)' : ''}</option>`).join('')}</select></label>
+  <p class="small muted" style="margin:-4px 0 10px">Voix utilisée : ${esVoice ? esc(esVoice.name) : 'celle de l\'appareil pour es-MX'}</p>
   <div class="row wrap" style="gap:8px"><button class="btn sm" data-a="voiceTestSpeak">${I.speak} Tester la lecture</button><button class="btn sm" data-a="voiceTestMic">${I.mic} Tester le micro</button>${(ui.voiceLog || []).length ? '<button class="btn sm ghost" data-a="voiceLogClear">Effacer</button>' : ''}</div>
   <pre id="voiceLog" class="soft small" style="white-space:pre-wrap;margin:10px 0 0;min-height:44px;font-family:ui-monospace,Menlo,monospace;font-size:12px">${esc((ui.voiceLog || []).join('\n')) || 'Le journal du test s\'affichera ici.'}</pre>
   <p class="small muted">Si le micro ne marche pas sur iPhone : active la dictée (Réglages → Général → Clavier → Activer Dictée), autorise le micro pour Safari, et essaie aussi depuis Safari plutôt que depuis l'icône. En dernier recours, la touche 🎤 du clavier de l'iPhone dicte dans n'importe quel champ de texte.</p>`;
@@ -1056,7 +1067,7 @@ document.addEventListener('input', e => {
   else if (k === 'convoTheme') S.convoTheme[weekKey(today())] = v;
   else if (k.startsWith('ai:')) { const f = k.slice(3); aiS()[f] = f === 'limit' ? Math.max(0, +v || 0) : v; save(); return; }
   else if (k.startsWith('write:')) { (S.writing ||= { topic: '', text: '' })[k.slice(6)] = v; const wc = $('#wc'); if (wc && k === 'write:text') wc.textContent = v.trim().split(/\s+/).filter(Boolean).length; }
-  else if (k.startsWith('set:')) { const f = k.slice(4); S.settings[f] = f === 'newPerDay' ? Math.max(0, +v || 0) : f === 'transcribe' ? v === 'on' : v; save(); if (e.target.tagName === 'SELECT') render(); return; }
+  else if (k.startsWith('set:')) { const f = k.slice(4); S.settings[f] = f === 'newPerDay' ? Math.max(0, +v || 0) : f === 'transcribe' ? v === 'on' : v; save(); if (f === 'voice') pickVoice(); if (e.target.tagName === 'SELECT') render(); return; }
   else return;
   save();
 });
