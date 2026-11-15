@@ -138,7 +138,7 @@ function vChat() {
       ${chatBusy ? `<div class="bubble ai" id="liveBubble">${esc(chatLive) || '<span class="dots-typing"><i></i><i></i><i></i></span>'}</div>` : ''}
     </div>
     ${msgs.length ? `<div class="chat-input">
-        <textarea id="chatIn" rows="1" placeholder="${L ? 'Escribe en español…' : 'Écris en espagnol…'}"></textarea>
+        <textarea id="chatIn" rows="1" placeholder="${L ? 'Escribe en español…' : 'Écris en espagnol…'}">${esc(ui.chatDraft || '')}</textarea>
         ${canListen ? `<button class="icon-btn ${ui.listening ? 'rec-live' : ''}" data-a="chatMic" aria-label="Parler">${I.mic}</button>` : ''}
         <button class="icon-btn send" data-a="chatSend" aria-label="Envoyer">${I.arrow}</button>
       </div>
@@ -252,11 +252,17 @@ window.AI_ACTIONS = {
   chatMode: v => { const ch = chatS(); if (ch.mode !== v && ch.msgs.length && !confirm('Changer de mode recommence la conversation. Continuer ?')) return false; if (ch.mode !== v) ch.msgs = []; ch.mode = v; save(); },
   chatStart: () => { const ch = chatS(); ch.msgs = [{ role: 'user', content: '[Inicio]', hidden: true }]; chatSendText(''); return false; },
   chatNew: () => { if (chatS().msgs.length > 2 && !confirm('Effacer cette conversation ?')) return false; chatS().msgs = []; handsFree = false; speechSynthesis?.cancel(); save(); },
-  chatSend: () => { const i = $('#chatIn'); const t = i?.value.trim(); if (!t) return false; i.value = ''; chatSendText(t); return false; },
+  chatSend: () => { const i = $('#chatIn'); const t = (i?.value || ui.chatDraft || '').trim(); if (!t) return false; ui.chatDraft = ''; if (i) i.value = ''; chatSendText(t); return false; },
   chatMic: () => {
     if (chatBusy) return false;
     speechSynthesis?.cancel();
-    listenOnce('es-MX', alts => { const t = alts[0].trim(); if (!t) return; if (handsFree) chatSendText(t); else { const i = $('#chatIn'); if (i) { i.value = (i.value ? i.value + ' ' : '') + t; i.focus(); } } });
+    // Le texte reconnu est gardé dans ui.chatDraft : il survit au redessin de l'écran
+    ui.chatDraft = $('#chatIn')?.value || ui.chatDraft || '';
+    listenOnce('es-MX', alts => {
+      const t = alts[0].trim(); if (!t) return;
+      if (handsFree) { ui.chatDraft = ''; chatSendText(t); }
+      else ui.chatDraft = (ui.chatDraft ? ui.chatDraft.trim() + ' ' : '') + t;
+    });
     return false;
   },
   handsFree: () => { handsFree = !handsFree; if (handsFree && !chatBusy) { const last = chatS().msgs.filter(x => !x.hidden).slice(-1)[0]; if (last?.role === 'assistant') speakThen(last.content, () => handsFree && A.chatMic()); } else speechSynthesis?.cancel(); },

@@ -198,6 +198,8 @@ function speakRaw(text, { onend, log } = {}) {
   const ss = window.speechSynthesis;
   if (!ss) { toast('Lecture vocale indisponible sur ce navigateur'); onend?.(); return; }
   if (!esVoice) pickVoice();
+  // Safari récent : session audio « lecture » pour jouer même quand l'iPhone est en silencieux (sans garantie)
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
   const go = () => {
     const u = new SpeechSynthesisUtterance(String(text).replace(/\([^)]*\)/g, ''));
     u.lang = esVoice?.lang || 'es-MX'; if (esVoice) u.voice = esVoice; u.rate = 0.92; u.volume = 1;
@@ -292,6 +294,7 @@ function srErrorText(code) {
 function listenOnce(lang, onText, log) {
   if (!SR) { modal(`<h3>Micro</h3><p>${isIOS() ? 'La reconnaissance vocale n\'est pas disponible ici. Astuce : utilise la touche micro 🎤 du clavier de l\'iPhone pour dicter dans le champ de texte.' : 'Reconnaissance vocale indisponible sur ce navigateur (essaie Chrome ou Safari).'}</p><button class="btn" data-a="close">OK</button>`); return; }
   try { rec1?.abort(); } catch (e) {}
+  try { if (navigator.audioSession) navigator.audioSession.type = 'play-and-record'; } catch (e) {}
   const r = new SR(); rec1 = r;
   // interimResults = true : l'iPhone ne renvoie parfois jamais de résultat « final »
   r.lang = lang; r.interimResults = true; r.maxAlternatives = 3; r.continuous = false;
@@ -301,11 +304,15 @@ function listenOnce(lang, onText, log) {
   r.onstart = () => log?.('● écoute démarrée (' + lang + ')');
   r.onaudiostart = () => log?.('● micro ouvert');
   r.onspeechstart = () => log?.('● voix détectée');
+  let silence;
   r.onresult = e => {
     const res = e.results[e.results.length - 1];
     last = [...res].map(x => x.transcript);
     log?.((res.isFinal ? '… final : ' : '… en cours : ') + last[0]);
+    clearTimeout(silence);
     if (res.isFinal) { deliver(last); try { r.stop(); } catch (x) {} }
+    // Arrêt après 2,2 s sans nouveau mot (l'iPhone attend sinon ~4 s) : laisse le temps de chercher ses mots
+    else silence = setTimeout(() => { log?.('● fin de phrase détectée'); try { r.stop(); } catch (x) {} }, 2200);
   };
   r.onerror = e => {
     err = e.error; log?.('✗ erreur : ' + e.error);
@@ -314,6 +321,7 @@ function listenOnce(lang, onText, log) {
     else setTimeout(() => modal(`<h3>Micro</h3><p>${esc(srErrorText(e.error))}</p><p class="small muted">Code : ${esc(e.error)}</p><div class="row"><button class="btn" data-a="close">OK</button><button class="btn ghost" data-a="goVoiceDiag">Diagnostic</button></div>`), 50);
   };
   r.onend = () => {
+    clearTimeout(silence);
     log?.('■ écoute terminée');
     if (!delivered && last.length) deliver(last);
     else if (!delivered && !err) toast(langStage() >= 2 ? 'No reconocí nada, inténtalo otra vez' : 'Rien reconnu : réessaie en parlant juste après avoir touché le micro');
@@ -325,6 +333,7 @@ function listenOnce(lang, onText, log) {
 function startTranscript(state) {
   if (!SR) return;
   state.text = []; state.live = true;
+  try { if (navigator.audioSession) navigator.audioSession.type = 'play-and-record'; } catch (e) {}
   const go = () => {
     if (!state.live) return;
     const r = new SR(); state.sr = r;
@@ -334,15 +343,22 @@ function startTranscript(state) {
       for (let i = e.resultIndex; i < e.results.length; i++) {
         if (e.results[i].isFinal) state.text.push(e.results[i][0].transcript.trim()); else interim += e.results[i][0].transcript;
       }
+      // L'iPhone ne valide parfois jamais : on garde le texte en cours pour ne pas le perdre
+      state.pending = interim.trim();
       const el = document.querySelector('#liveTx'); if (el) el.textContent = (state.text.join(' ') + ' ' + interim).trim();
     };
     r.onerror = e => { if (e.error === 'not-allowed' || e.error === 'service-not-allowed') state.live = false; };
-    r.onend = () => { if (state.live) setTimeout(go, 150); };
+    r.onend = () => { if (state.pending) { state.text.push(state.pending); state.pending = ''; } if (state.live) setTimeout(go, 150); };
     try { r.start(); } catch (e) { state.live = false; }
   };
   go();
 }
-function stopTranscript(state) { if (!state) return ''; state.live = false; try { state.sr?.stop(); } catch (e) {} return (state.text || []).join(' ').replace(/\s+/g, ' ').trim(); }
+function stopTranscript(state) {
+  if (!state) return ''; state.live = false;
+  try { state.sr?.stop(); } catch (e) {}
+  if (state.pending) { (state.text ||= []).push(state.pending); state.pending = ''; }
+  return (state.text || []).join(' ').replace(/\s+/g, ' ').trim();
+}
 
 // ---------- IndexedDB (vocaux) ----------
 const idb = (() => {
@@ -1077,6 +1093,7 @@ document.addEventListener('change', e => {
   f.text().then(txt => { const d = JSON.parse(txt); if (!d.cards) throw 0; S = Object.assign(DEFAULT(), d); save(); render(); toast('Importé ✓'); }).catch(() => toast('Fichier invalide'));
 });
 document.addEventListener('input', e => {
+  if (e.target.id === 'chatIn') ui.chatDraft = e.target.value;
   if (e.target.id === 'ansIn' && ui.review) ui.review.typed = e.target.value;
   if (e.target.id === 'drillIn' && ui.drill) ui.drill.said = e.target.value;
 });
