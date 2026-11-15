@@ -186,13 +186,26 @@ function pickVoice() {
   esVoice = vs.find(v => /es[-_](MX|US|419|CO)/i.test(v.lang)) || vs.find(v => /^es/i.test(v.lang)) || null;
 }
 if ('speechSynthesis' in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
-function speak(text) {
-  if (!('speechSynthesis' in window)) return toast('Synthèse vocale indisponible');
-  speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text.replace(/\([^)]*\)/g, ''));
-  u.lang = esVoice?.lang || 'es-MX'; if (esVoice) u.voice = esVoice; u.rate = 0.92;
-  speechSynthesis.speak(u);
+// Lecture robuste : sur iPhone, un speak() juste après cancel() est souvent ignoré
+function speakRaw(text, { onend, log } = {}) {
+  const ss = window.speechSynthesis;
+  if (!ss) { toast('Lecture vocale indisponible sur ce navigateur'); onend?.(); return; }
+  if (!esVoice) pickVoice();
+  const go = () => {
+    const u = new SpeechSynthesisUtterance(String(text).replace(/\([^)]*\)/g, ''));
+    u.lang = esVoice?.lang || 'es-MX'; if (esVoice) u.voice = esVoice; u.rate = 0.92; u.volume = 1;
+    let started = false;
+    u.onstart = () => { started = true; log?.('▶ lecture démarrée (' + (esVoice ? esVoice.name : 'voix par défaut ' + u.lang) + ')'); };
+    u.onend = () => { log?.('■ lecture terminée'); onend?.(); };
+    u.onerror = e => { log?.('✗ erreur de lecture : ' + e.error); if (!['interrupted', 'canceled'].includes(e.error)) toast('Lecture impossible : ' + e.error); onend?.(); };
+    ss.speak(u);
+    if (ss.paused) ss.resume();
+    // Si rien ne démarre (iPhone bloqué), on prévient
+    setTimeout(() => { if (!started && !ss.speaking) { log?.('✗ la lecture n\'a pas démarré'); toast('Pas de son : vérifie le volume et le mode silencieux'); } }, 2500);
+  };
+  if (ss.speaking || ss.pending) { ss.cancel(); setTimeout(go, 150); } else go();
 }
+function speak(text) { speakRaw(text); }
 
 // ---------- Correction souple ----------
 const stripAcc = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -256,16 +269,50 @@ const SUGGEST = { ok: 2, typo: 2, close: 1, wrong: 0 };
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const canListen = !!SR;
 let rec1 = null;
-function listenOnce(lang, onText) {
-  if (!SR) return toast(langStage() >= 2 ? 'Reconocimiento de voz no disponible' : 'Reconnaissance vocale indisponible sur ce navigateur');
+const isStandalone = () => window.navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+function srErrorText(code) {
+  const ios = isIOS();
+  return {
+    'not-allowed': ios ? 'Micro ou reconnaissance vocale refusés. iPhone : Réglages → Safari → Microphone → Autoriser, et Réglages → Confidentialité → Reconnaissance vocale.' : 'Micro refusé : autorise-le dans les réglages du navigateur.',
+    'service-not-allowed': ios ? 'Reconnaissance vocale bloquée par l\'iPhone. Active la dictée (Réglages → Général → Clavier → Activer Dictée)' + (isStandalone() ? ', ou ouvre l\'appli dans Safari plutôt que depuis l\'icône.' : '.') : 'Reconnaissance vocale non autorisée par le navigateur.',
+    'audio-capture': 'Aucun micro disponible (déjà utilisé par une autre appli ?).',
+    'network': 'La reconnaissance vocale a besoin d\'internet.',
+    'no-speech': 'Je ne t\'ai pas entendu. Parle juste après avoir touché le micro.',
+    'language-not-supported': 'L\'espagnol n\'est pas disponible pour la dictée : ajoute-le dans Réglages → Général → Clavier → Claviers.'
+  }[code] || 'Erreur de reconnaissance vocale : ' + code;
+}
+function listenOnce(lang, onText, log) {
+  if (!SR) { modal(`<h3>Micro</h3><p>${isIOS() ? 'La reconnaissance vocale n\'est pas disponible ici. Astuce : utilise la touche micro 🎤 du clavier de l\'iPhone pour dicter dans le champ de texte.' : 'Reconnaissance vocale indisponible sur ce navigateur (essaie Chrome ou Safari).'}</p><button class="btn" data-a="close">OK</button>`); return; }
   try { rec1?.abort(); } catch (e) {}
   const r = new SR(); rec1 = r;
-  r.lang = lang; r.interimResults = false; r.maxAlternatives = 3; r.continuous = false;
+  // interimResults = true : l'iPhone ne renvoie parfois jamais de résultat « final »
+  r.lang = lang; r.interimResults = true; r.maxAlternatives = 3; r.continuous = false;
+  let delivered = false, last = [], err = null;
+  const deliver = alts => { if (delivered || !alts.length || !alts[0].trim()) return; delivered = true; log?.('✓ reconnu : « ' + alts[0] + ' »'); onText(alts); };
   ui.listening = true; render();
-  r.onresult = e => { const alts = [...e.results[0]].map(x => x.transcript); onText(alts); };
-  r.onerror = e => { if (e.error === 'not-allowed') toast(t('mic_err')); else if (e.error === 'no-speech') toast(langStage() >= 2 ? 'No te escuché' : 'Je ne t\'ai pas entendu'); };
-  r.onend = () => { ui.listening = false; rec1 = null; render(); };
-  try { r.start(); } catch (e) { ui.listening = false; }
+  r.onstart = () => log?.('● écoute démarrée (' + lang + ')');
+  r.onaudiostart = () => log?.('● micro ouvert');
+  r.onspeechstart = () => log?.('● voix détectée');
+  r.onresult = e => {
+    const res = e.results[e.results.length - 1];
+    last = [...res].map(x => x.transcript);
+    log?.((res.isFinal ? '… final : ' : '… en cours : ') + last[0]);
+    if (res.isFinal) { deliver(last); try { r.stop(); } catch (x) {} }
+  };
+  r.onerror = e => {
+    err = e.error; log?.('✗ erreur : ' + e.error);
+    if (e.error === 'aborted') return;
+    if (e.error === 'no-speech' || e.error === 'network') toast(srErrorText(e.error));
+    else setTimeout(() => modal(`<h3>Micro</h3><p>${esc(srErrorText(e.error))}</p><p class="small muted">Code : ${esc(e.error)}</p><div class="row"><button class="btn" data-a="close">OK</button><button class="btn ghost" data-a="goVoiceDiag">Diagnostic</button></div>`), 50);
+  };
+  r.onend = () => {
+    log?.('■ écoute terminée');
+    if (!delivered && last.length) deliver(last);
+    else if (!delivered && !err) toast(langStage() >= 2 ? 'No reconocí nada, inténtalo otra vez' : 'Rien reconnu : réessaie en parlant juste après avoir touché le micro');
+    ui.listening = false; rec1 = null; render();
+  };
+  try { r.start(); } catch (e) { ui.listening = false; log?.('✗ démarrage impossible : ' + e.message); toast('Micro : ' + e.message); render(); }
 }
 // Transcription continue pendant le vocal de 2 min
 function startTranscript(state) {
@@ -703,6 +750,24 @@ function vErrors() {
   <hr class="sep">
   ${S.errors.length ? S.errors.slice().reverse().map(e => `<div class="list-item row"><div class="grow"><div class="small" style="text-decoration:line-through;color:var(--bad)">${esc(e.a)}</div><div style="font-weight:600">${esc(e.b)}</div><div class="small" style="color:var(--ink3)">${esc(e.date)}${e.n > 1 ? ' · ×' + e.n : ''}</div></div><button class="btn sm ghost" data-a="errAgain" data-v="${e.id}">+1</button><button class="icon-btn" data-a="errDel" data-v="${e.id}">${I.x}</button></div>`).join('') : `<div class="empty">${langStage() >= 2 ? 'Ningún error anotado todavía.' : 'Aucune erreur notée pour l\'instant.'}</div>`}`;
 }
+function voiceLog(line) {
+  (ui.voiceLog ||= []).push(new Date().toLocaleTimeString('fr-FR') + '  ' + line);
+  const el = $('#voiceLog'); if (el) el.textContent = ui.voiceLog.join('\n');
+}
+function vVoiceDiag() {
+  const vs = window.speechSynthesis?.getVoices?.() || [], es = vs.filter(v => /^es/i.test(v.lang));
+  const ok = b => b ? '<b style="color:var(--sage-ink)">✓</b>' : '<b style="color:var(--bad)">✗</b>';
+  return `<h3 id="voiceDiag">Voix : diagnostic</h3>
+  <div class="soft small stack" style="margin-bottom:10px">
+    <div>${ok(!!SR)} Reconnaissance vocale ${SR ? 'disponible' : 'indisponible sur ce navigateur'}</div>
+    <div>${ok(!!window.speechSynthesis)} Lecture à voix haute · ${es.length} voix espagnole${es.length > 1 ? 's' : ''}${es.length ? ' (' + esc(es.slice(0, 3).map(v => v.name).join(', ')) + ')' : ''}</div>
+    <div>${ok(isSecureContext)} Connexion sécurisée (https)</div>
+    <div>ℹ︎ ${isIOS() ? 'iPhone / iPad' : 'Ordinateur ou Android'} · ${isStandalone() ? 'appli installée (icône)' : 'dans le navigateur'}</div>
+  </div>
+  <div class="row wrap" style="gap:8px"><button class="btn sm" data-a="voiceTestSpeak">${I.speak} Tester la lecture</button><button class="btn sm" data-a="voiceTestMic">${I.mic} Tester le micro</button>${(ui.voiceLog || []).length ? '<button class="btn sm ghost" data-a="voiceLogClear">Effacer</button>' : ''}</div>
+  <pre id="voiceLog" class="soft small" style="white-space:pre-wrap;margin:10px 0 0;min-height:44px;font-family:ui-monospace,Menlo,monospace;font-size:12px">${esc((ui.voiceLog || []).join('\n')) || 'Le journal du test s\'affichera ici.'}</pre>
+  <p class="small muted">Si le micro ne marche pas sur iPhone : active la dictée (Réglages → Général → Clavier → Activer Dictée), autorise le micro pour Safari, et essaie aussi depuis Safari plutôt que depuis l'icône. En dernier recours, la touche 🎤 du clavier de l'iPhone dicte dans n'importe quel champ de texte.</p>`;
+}
 function vSettings() {
   const s = S.settings;
   return `<div class="stack">
@@ -715,6 +780,8 @@ function vSettings() {
     <label class="field"><span>Transcription des vocaux (reconnaissance vocale)</span><select data-in="set:transcribe"><option value="on" ${s.transcribe !== false ? 'selected' : ''}>Activée${canListen ? '' : ' (indisponible sur ce navigateur)'}</option><option value="off" ${s.transcribe === false ? 'selected' : ''}>Désactivée</option></select></label>
     <label class="field"><span>Thème</span><select data-in="set:theme"><option value="auto" ${s.theme === 'auto' ? 'selected' : ''}>Automatique</option><option value="light" ${s.theme === 'light' ? 'selected' : ''}>Clair</option><option value="dark" ${s.theme === 'dark' ? 'selected' : ''}>Sombre</option></select></label>
   </div>
+  <hr class="sep">
+  ${vVoiceDiag()}
   <hr class="sep">
   ${vAISettings()}
   <hr class="sep">
@@ -932,6 +999,10 @@ const A = {
   openMonth: v => { ui.openMonth = ui.openMonth === +v ? 0 : +v; },
   deliv: v => { S.deliv[v] = ((S.deliv[v] || 0) + 1) % 3; save(); },
   openQ: v => { ui.openQ = ui.openQ === +v ? null : +v; },
+  voiceTestSpeak: () => { voiceLog('Test lecture…'); speakRaw('Hola Matis, ¿me escuchas bien?', { log: voiceLog }); return false; },
+  voiceTestMic: () => { voiceLog('Test micro : dis « hola, me llamo Matis »'); listenOnce('es-MX', alts => toast('Reconnu : ' + alts[0]), voiceLog); return false; },
+  voiceLogClear: () => { ui.voiceLog = []; },
+  goVoiceDiag: () => { closeModal(); ui.tab = 'progress'; ui.sub.progress = 'settings'; ui.review = null; render(); setTimeout(() => $('#voiceDiag')?.scrollIntoView({ block: 'start' }), 50); return false; },
   writeTopic: v => { (S.writing ||= { topic: '', text: '' }).topic = v; save(); },
   dictateWriting: () => {
     listenOnce('es-MX', alts => { const w = S.writing ||= { topic: '', text: '' }; let s = alts[0].trim(); s = s.charAt(0).toUpperCase() + s.slice(1); w.text = (w.text ? w.text.trim() + ' ' : '') + s + '.'; save(); render(); });

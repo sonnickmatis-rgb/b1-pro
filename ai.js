@@ -188,12 +188,8 @@ async function chatSendText(text) {
   }
 }
 function speakThen(text, then) {
-  if (!('speechSynthesis' in window)) return then?.();
-  speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = esVoice?.lang || 'es-MX'; if (esVoice) u.voice = esVoice; u.rate = 0.95;
-  u.onend = () => then?.(); u.onerror = () => then?.();
-  speechSynthesis.speak(u);
+  let done = false;
+  speakRaw(text, { onend: () => { if (!done) { done = true; then?.(); } } });
 }
 function aiError(e) { modal(`<h3>IA</h3><p>${esc(aiErrMsg(e))}</p><div class="row"><button class="btn" data-a="close">OK</button>${e.code === 'NOKEY' || e.code === 'LIMIT' || e.status === 401 ? '<button class="btn ghost" data-a="goAISettings">Réglages IA</button>' : ''}</div>`); }
 function busyModal(msg) { modal(`<div class="row"><span class="spinner"></span><b>${esc(msg || 'Claude réfléchit…')}</b></div><p class="small muted">Quelques secondes.</p>`); }
