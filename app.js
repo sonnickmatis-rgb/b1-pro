@@ -60,7 +60,7 @@ function langStage() {
 }
 // [palier où ça passe en espagnol, fr, es]
 const STR = {
-  tab_today: [1, 'Aujourd\'hui', 'Hoy'], tab_cards: [1, 'Cartes', 'Tarjetas'], tab_practice: [1, 'Pratique', 'Práctica'], tab_plan: [1, 'Programme', 'Programa'], tab_progress: [1, 'Suivi', 'Progreso'],
+  tab_today: [1, 'Aujourd\'hui', 'Hoy'], tab_chat: [1, 'Parler', 'Hablar'], writing: [1, 'Écrit', 'Escrito'], tab_cards: [1, 'Cartes', 'Tarjetas'], tab_practice: [1, 'Pratique', 'Práctica'], tab_plan: [1, 'Programme', 'Programa'], tab_progress: [1, 'Suivi', 'Progreso'],
   morning: [1, 'Matin', 'Mañana'], evening: [1, 'Soir', 'Noche'], morning_sub: [2, 'Activer : voix, vocabulaire, grammaire', 'Activar: voz, vocabulario, gramática'], evening_sub: [2, 'Absorber et produire', 'Absorber y producir'],
   normal: [2, 'Normal', 'Normal'], minimum: [2, 'Minimum vital', 'Mínimo vital'],
   streak: [1, 'jours d\'affilée', 'días seguidos'], day: [1, 'Jour', 'Día'], due: [1, 'cartes à revoir', 'tarjetas por repasar'], vocals: [2, 'vocaux ce mois', 'audios este mes'],
@@ -96,6 +96,7 @@ const tTask = id => { const x = TASKS[id]; return langStage() >= 2 ? [x.es, x.su
 
 // ---------- Icons ----------
 const I = {
+  chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/></svg>',
   logo: '<svg viewBox="0 0 24 24"><circle cx="8" cy="8" r="4.2" fill="#C3D4A0"/><circle cx="16" cy="8" r="4.2" fill="#fff"/><circle cx="8" cy="16" r="4.2" fill="#fff"/><circle cx="16" cy="16" r="4.2" fill="#C3D4A0"/></svg>',
   home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11l8-6 8 6v8a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/></svg>',
   cards: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="14" height="14" rx="3"/><path d="M7 3h11a3 3 0 0 1 3 3v11"/></svg>',
@@ -306,7 +307,7 @@ let timer = null;
 // ---------- Render ----------
 function render() {
   checkRecovery();
-  const v = { today: vToday, cards: vCards, practice: vPractice, plan: vPlan, progress: vProgress }[ui.tab]();
+  const v = { today: vToday, cards: vCards, chat: vChat, practice: vPractice, plan: vPlan, progress: vProgress }[ui.tab]();
   $('#app').innerHTML = v + tabbar();
   renderTimer();
   if (ui.tab === 'cards' && ui.review && !ui.review.flip && S.settings.cardMode === 'type') $('#ansIn')?.focus();
@@ -315,7 +316,7 @@ function render() {
   if (!document.documentElement.dataset.theme) delete document.documentElement.dataset.theme;
 }
 function tabbar() {
-  const tabs = [['today', I.home, t('tab_today')], ['cards', I.cards, t('tab_cards')], ['practice', I.mic, t('tab_practice')], ['plan', I.map, t('tab_plan')], ['progress', I.chart, t('tab_progress')]];
+  const tabs = [['today', I.home, t('tab_today')], ['cards', I.cards, t('tab_cards')], ['chat', I.chat, t('tab_chat')], ['practice', I.mic, t('tab_practice')], ['plan', I.map, t('tab_plan')], ['progress', I.chart, t('tab_progress')]];
   return `<nav class="tabbar">${tabs.map(([id, ic, l]) => `<button data-a="tab" data-v="${id}" class="${ui.tab === id ? 'on' : ''}">${ic}<span>${l}</span></button>`).join('')}</nav>`;
 }
 const hero = (img, inner, cls = '') => `<header class="hero ${cls}" style="background-image:url('${img}')">${inner}</header>`;
@@ -379,6 +380,10 @@ function vToday() {
       <ul class="tasks">${p.pm.map(taskRow).join('')}</ul>
     </div>
   </section>
+  ${hasKey() ? `<section class="block">
+    <div class="row between"><h3 style="margin:0">✨ ${langStage() >= 1 ? 'Consejo del día' : 'Conseil du jour'}</h3>${aiS().tips[td] ? `<button class="btn sm ghost" data-a="aiTip">${langStage() >= 2 ? 'Otro' : 'Autre'}</button>` : ''}</div>
+    ${aiS().tips[td] ? `<div class="gap-l">${aiS().tips[td].map(x => `<div class="list-item">${esc(x)}</div>`).join('')}</div>` : `<p class="small muted">${langStage() >= 2 ? 'Claude analiza tus datos y te da 3 consejos para hoy.' : 'Claude regarde tes statistiques et te donne 3 conseils pour aujourd\'hui.'}</p><button class="btn sage" data-a="aiTip">✨ ${langStage() >= 2 ? 'Ver mis consejos' : 'Voir mes conseils'}</button>`}
+  </section>` : ''}
   <section class="block">
     <h2>${t('this_month')}</h2>
     <div class="hscroll">
@@ -410,10 +415,10 @@ function vCards() {
       <div class="stat"><b>${S.cardLog[today()]?.rev || 0}</b><span>${langStage() >= 2 ? 'repasos hoy' : 'révisions auj.'}</span></div>
     </div>
     ${nDue > 100 ? `<div class="banner warn gap-l">${t('backlog')}</div>` : ''}
-    <button class="btn block-w gap-l" data-a="cardForm">${I.plus} ${t('add_card')}</button>
+    <div class="row gap-l"><button class="btn grow" data-a="cardForm">${I.plus} ${t('add_card')}</button>${hasKey() ? `<button class="btn sage" data-a="aiGenCards">✨ ${langStage() >= 2 ? 'Generar' : 'Générer'}</button>` : ''}</div>
   </section>
   ${S.inbox.length ? `<section class="block"><h3>${t('inbox')}</h3><p class="small muted" style="margin-top:-4px">${t('inbox_sub')}</p>
-    ${S.inbox.map(w => `<div class="list-item row"><div class="grow"><b>${esc(w.word)}</b><div class="small muted">${esc(w.date)}</div></div><button class="btn sm" data-a="cardForm" data-v="${w.id}">${I.plus}</button><button class="icon-btn" data-a="inboxDel" data-v="${w.id}">${I.x}</button></div>`).join('')}
+    ${S.inbox.map(w => `<div class="list-item row"><div class="grow"><b>${esc(w.word)}</b><div class="small muted">${esc(w.date)}</div></div>${hasKey() ? `<button class="btn sm sage" data-a="aiWordCard" data-v="${w.id}">✨</button>` : ''}<button class="btn sm" data-a="cardForm" data-v="${w.id}">${I.plus}</button><button class="icon-btn" data-a="inboxDel" data-v="${w.id}">${I.x}</button></div>`).join('')}
   </section>` : ''}
   <section class="block">
     <h3>${t('all_cards')}</h3>
@@ -467,14 +472,18 @@ function vReview() {
     ${r.flip ? `<div class="rate">${[0, 1, 2, 3].map(k => `<button class="r${k} ${res && SUGGEST[res.verdict] === k ? 'sugg' : ''}" data-a="rate" data-v="${k}">${t(['again', 'hard', 'good', 'easy'][k])}<small>${ivLabel(c, k)}</small></button>`).join('')}</div>`
       : mode === 'oral' ? `<button class="btn block-w" style="margin-top:12px;padding:15px" data-a="flip">${t('show')}</button>`
       : `<div class="row" style="margin-top:12px"><button class="btn ghost" data-a="flip">${L ? 'No sé' : 'Je ne sais pas'}</button><button class="btn grow" style="padding:15px" data-a="checkCard">${t('check')}</button></div>`}
+    ${r.flip && hasKey() ? `<div class="row wrap gap-l" style="gap:8px">
+      ${res && res.verdict !== 'ok' && res.verdict !== 'typo' && !r.ai ? `<button class="btn sm sage" data-a="aiJudge">✨ ${L ? '¿Mi respuesta vale?' : 'Ma réponse est-elle acceptable ?'}</button>` : ''}
+      ${!r.ai ? `<button class="btn sm ghost" data-a="aiExplain">✨ ${L ? 'Explicar' : 'Explique-moi'}</button>` : ''}</div>` : ''}
+    ${r.ai ? `<div class="banner gap-l">${r.ai.aceptable === true ? '<b>✓ Claude accepte ta réponse.</b><br>' : r.ai.aceptable === false ? '<b>✗ Claude ne l\'accepte pas.</b><br>' : ''}<span style="white-space:pre-wrap">${esc(r.ai.explicacion)}</span>${r.ai.regla ? `<div class="small muted" style="margin-top:6px">${esc(r.ai.regla)}</div>` : ''}</div>` : ''}
   </section>`;
 }
 
 // ----- Pratique -----
 function vPractice() {
   const sub = ui.sub.practice;
-  const seg = `<div class="seg">${[['drill', t('drill')], ['vocal', t('vocal')], ['intensive', t('intensive')]].map(([k, l]) => `<button class="${sub === k ? 'on' : ''}" data-a="sub" data-v="practice:${k}">${l}</button>`).join('')}</div>`;
-  const body = { drill: vDrill, vocal: vVocal, intensive: vIntensive }[sub]();
+  const seg = `<div class="seg">${[['drill', t('drill')], ['vocal', t('vocal')], ['writing', t('writing')], ['intensive', t('intensive')]].map(([k, l]) => `<button class="${sub === k ? 'on' : ''}" data-a="sub" data-v="practice:${k}">${l}</button>`).join('')}</div>`;
+  const body = { drill: vDrill, vocal: vVocal, writing: vWriting, intensive: vIntensive }[sub]();
   return hero('img/verbs.jpg', `${topbar()}<div><h1>${t('tab_practice')}</h1><p class="lead">${langStage() >= 3 ? 'Producir cada semana. Entender sin producir no te lleva al B1.' : 'Produire chaque semaine. Comprendre sans produire ne fait pas passer au B1.'}</p></div>`, 'small') + `<section class="sheet">${seg}${body}</section>`;
 }
 function newDrill() {
@@ -538,8 +547,26 @@ function vVocal() {
   ${Object.keys(byMonth).length ? Object.keys(byMonth).sort((a, b) => b - a).map(k => `<p class="eyebrow gap-l">${langStage() >= 1 ? 'Mes' : 'Mois'} ${k} · ${byMonth[k].length}</p>${byMonth[k].slice().reverse().map((v, i, arr) => `
       <div class="list-item row"><div class="grow"><div style="font-weight:600">${esc(parse(v.date).toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' }))} ${i === arr.length - 1 ? `<span class="tag" style="background:var(--sage);color:var(--sage-ink)">${t('reference')}</span>` : ''}</div><div class="small muted">${fmt(v.dur)}${v.nw ? ` · ${v.nw} ${langStage() >= 2 ? 'palabras' : 'mots'} · ${v.wpm}/min` : ''}${v.words?.length ? ' · ' + esc(v.words.join(', ')) : ''}</div></div>
       <button class="icon-btn" data-a="play" data-v="${v.id}">${I.play}</button><button class="icon-btn" data-a="vocalDel" data-v="${v.id}">${I.x}</button></div>
-      ${v.tx ? `<details class="small" style="margin:-4px 0 6px"><summary class="muted">${langStage() >= 2 ? 'Ver transcripción' : 'Voir la transcription'}</summary><p style="margin:6px 0 0">${esc(v.tx)}</p></details>` : ''}`).join('')}`).join('') : `<div class="empty">${langStage() >= 2 ? 'Aún no hay audios.' : 'Pas encore de vocal.'}</div>`}
+      ${v.tx ? `<details class="small" style="margin:-4px 0 6px"><summary class="muted">${langStage() >= 2 ? 'Ver transcripción' : 'Voir la transcription'}</summary><p style="margin:6px 0 0">${esc(v.tx)}</p>${hasKey() ? `<button class="btn sm sage" style="margin-top:6px" data-a="aiCorrectVocal" data-v="${v.id}">✨ ${langStage() >= 2 ? 'Corregir' : 'Corriger'}</button>` : ''}</details>` : ''}`).join('')}`).join('') : `<div class="empty">${langStage() >= 2 ? 'Aún no hay audios.' : 'Pas encore de vocal.'}</div>`}
   <div id="player"></div>`;
+}
+const WRITING_TOPICS = {
+  1: ['Mi presentación en 10 frases (quién soy, qué hago, por qué América Latina)', 'Un día típico de mi semana', 'Mi ciudad: lo que me gusta y lo que no', 'Mensaje a un nuevo compañero de tándem'],
+  2: ['Mi viaje a Vietnam', 'El último partido que fotografié', 'Mi fin de semana pasado', 'Mi experiencia profesional para el CV'],
+  3: ['Un recuerdo de mi infancia', 'Correo a un hotel para reservar una habitación', 'Carta de motivación para una agencia receptiva', 'Describe un lugar que te marcó'],
+  4: ['¿Por qué quiero hacer un VIA o un PVT en América Latina?', 'Mis proyectos en cinco años', 'A favor o en contra del VAR', 'Correo para aceptar una entrevista'],
+  5: ['Correo de candidatura espontánea a una agencia', 'Respuesta a un cliente insatisfecho', 'Instrucciones para un grupo de turistas', 'Publicación de Instagram para una agencia'],
+  6: ['Correo profesional de 150 palabras sin diccionario', 'Balance de mis seis meses de español', 'Carta de motivación final', 'Respuesta a una oferta de VIA']
+};
+function vWriting() {
+  const w = S.writing ||= { topic: '', text: '' }, m = monthOf(today()), L = langStage() >= 2;
+  const words = (w.text || '').trim().split(/\s+/).filter(Boolean).length;
+  return `<p class="small muted" style="margin-top:0">${L ? 'El escrito de la semana (sábado). Elige un tema, escribe sin diccionario y luego corrige con Claude.' : 'L\'écrit de la semaine (samedi). Choisis un sujet, écris sans dictionnaire, puis fais corriger par Claude.'}</p>
+  <div class="chips" style="margin-bottom:12px">${WRITING_TOPICS[m.id].map(x => `<button class="chip ${w.topic === x ? 'on' : ''}" data-a="writeTopic" data-v="${esc(x)}">${esc(x)}</button>`).join('')}</div>
+  <label class="field"><span>${L ? 'Tema' : 'Sujet'}</span><input type="text" data-in="write:topic" value="${esc(w.topic)}"></label>
+  <label class="field gap-l"><span>${L ? 'Tu texto' : 'Ton texte'} · <span id="wc">${words}</span> ${L ? 'palabras' : 'mots'}</span><textarea data-in="write:text" rows="9" placeholder="${L ? 'Escribe aquí…' : 'Écris ici, en espagnol…'}">${esc(w.text)}</textarea></label>
+  <div class="row gap-l">${canListen ? `<button class="btn ghost ${ui.listening ? 'rec-live' : ''}" data-a="dictateWriting">${I.mic}</button>` : ''}
+    ${hasKey() ? `<button class="btn grow" data-a="aiCorrectWriting">✨ ${L ? 'Corregir con Claude' : 'Corriger avec Claude'}</button>` : `<button class="btn grow ghost" data-a="goAISettings">✨ ${L ? 'Activar la IA' : 'Activer l\'IA pour corriger'}</button>`}</div>`;
 }
 function vIntensive() {
   const x = S.intensive;
@@ -606,7 +633,7 @@ function vApply() {
   ${QUESTIONS.map((q, i) => { const a = S.answers[i] || ''; const o = ui.openQ === i; return `<div class="list-item">
     <button class="row" style="width:100%;text-align:left" data-a="openQ" data-v="${i}"><span class="st ${a.trim() ? 's2' : ''}">${i + 1}</span><span class="grow" style="font-weight:600">${esc(q)}</span></button>
     ${o ? `<div class="stack" style="margin-top:10px"><textarea data-in="ans:${i}" rows="5" placeholder="${langStage() >= 3 ? 'Mi respuesta…' : 'Ma réponse en espagnol…'}">${esc(a)}</textarea>
-      <div class="row"><button class="btn sm ghost" data-a="speak" data-v="${esc(q)}">${I.speak} ${langStage() >= 2 ? 'Escuchar' : 'Écouter'}</button>${canListen ? `<button class="btn sm ghost ${ui.listening ? 'rec-live' : ''}" data-a="dictate" data-v="${i}">${I.mic} ${langStage() >= 2 ? 'Dictar' : 'Dicter'}</button>` : ''}<button class="btn sm" data-a="practiceQ" data-v="${i}">${I.clock} ${langStage() >= 2 ? 'Responder 1 min' : 'Répondre en 1 min'}</button>${a.trim() ? `<button class="btn sm ghost" data-a="speak" data-v="${esc(a)}">${I.play}</button>` : ''}</div></div>` : ''}
+      <div class="row"><button class="btn sm ghost" data-a="speak" data-v="${esc(q)}">${I.speak} ${langStage() >= 2 ? 'Escuchar' : 'Écouter'}</button>${canListen ? `<button class="btn sm ghost ${ui.listening ? 'rec-live' : ''}" data-a="dictate" data-v="${i}">${I.mic} ${langStage() >= 2 ? 'Dictar' : 'Dicter'}</button>` : ''}<button class="btn sm" data-a="practiceQ" data-v="${i}">${I.clock} ${langStage() >= 2 ? 'Responder 1 min' : 'Répondre en 1 min'}</button>${a.trim() ? `<button class="btn sm ghost" data-a="speak" data-v="${esc(a)}">${I.play}</button>` : ''}${a.trim() && hasKey() ? `<button class="btn sm sage" data-a="aiCorrectAnswer" data-v="${i}">✨ ${langStage() >= 2 ? 'Corregir' : 'Corriger'}</button>` : ''}</div></div>` : ''}
   </div>`; }).join('')}
   <hr class="sep">
   <h3>${langStage() >= 2 ? 'Agencias receptivas' : 'Agences réceptives'} · ${S.agencies.length}/15</h3>
@@ -652,7 +679,8 @@ function vBalance() {
   <div class="stats"><div class="stat"><b>${st.days}/6</b><span>${langStage() >= 2 ? 'días' : 'jours'}</span></div><div class="stat"><b>${st.added}</b><span>${langStage() >= 2 ? 'tarjetas propias' : 'cartes créées'}</span></div><div class="stat"><b>${st.voc}</b><span>${langStage() >= 2 ? 'audios' : 'vocaux'}</span></div></div>
   <p class="eyebrow gap-l">${langStage() >= 2 ? 'Semana del' : 'Semaine du'} ${esc(parse(wk).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' }))}</p>
   <div class="stack">${BALANCE_Q.map(([es, fr], i) => `<label class="field"><span>${i + 1}. ${esc(es)}${langStage() < 3 ? ` <span style="color:var(--ink3)">· ${esc(fr)}</span>` : ''}</span><textarea rows="2" data-in="bal:${i}">${esc(w.a[i] || (i === 0 && !w.a[0] ? '' : ''))}</textarea></label>`).join('')}</div>
-  <button class="btn block-w gap-l" style="padding:14px" data-a="copyBalance">${I.copy} ${t('copy_balance')}</button>
+  ${hasKey() ? `<button class="btn block-w sage gap-l" style="padding:14px" data-a="aiCorrectBalance">✨ ${langStage() >= 2 ? 'Corregir y planificar con Claude' : 'Corriger et planifier avec Claude'}</button>` : ''}
+  <button class="btn block-w gap-l ${hasKey() ? 'ghost' : ''}" style="padding:14px" data-a="copyBalance">${I.copy} ${t('copy_balance')}</button>
   ${past.length ? `<hr class="sep"><h3>${langStage() >= 2 ? 'Semanas anteriores' : 'Semaines passées'}</h3>${past.map(k => `<details class="list-item"><summary class="row between"><b>${esc(k)}</b><span class="small muted">${weekStats(k).days}/6</span></summary><div class="small" style="margin-top:8px;white-space:pre-wrap">${esc(S.weekly[k].a.map((x, i) => x ? `${i + 1}. ${x}` : '').filter(Boolean).join('\n'))}</div></details>`).join('')}` : ''}`;
 }
 function vEval() {
@@ -687,6 +715,8 @@ function vSettings() {
     <label class="field"><span>Transcription des vocaux (reconnaissance vocale)</span><select data-in="set:transcribe"><option value="on" ${s.transcribe !== false ? 'selected' : ''}>Activée${canListen ? '' : ' (indisponible sur ce navigateur)'}</option><option value="off" ${s.transcribe === false ? 'selected' : ''}>Désactivée</option></select></label>
     <label class="field"><span>Thème</span><select data-in="set:theme"><option value="auto" ${s.theme === 'auto' ? 'selected' : ''}>Automatique</option><option value="light" ${s.theme === 'light' ? 'selected' : ''}>Clair</option><option value="dark" ${s.theme === 'dark' ? 'selected' : ''}>Sombre</option></select></label>
   </div>
+  <hr class="sep">
+  ${vAISettings()}
   <hr class="sep">
   <h3>Sauvegarde</h3>
   <p class="small muted" style="margin-top:-4px">Tes données restent sur ce téléphone. Exporte-les de temps en temps (les vocaux ne sont pas inclus).</p>
@@ -818,7 +848,8 @@ const A = {
   go: v => {
     const g = TASKS[v].go;
     if (g === 'cards') { ui.tab = 'cards'; A.startReview(); }
-    else if (g === 'drill' || g === 'vocal' || g === 'intensive') { ui.tab = 'practice'; ui.sub.practice = g; }
+    else if (g === 'drill' || g === 'vocal' || g === 'intensive' || g === 'writing') { ui.tab = 'practice'; ui.sub.practice = g; }
+    else if (g === 'convo' && hasKey()) { ui.tab = 'chat'; }
     else if (g === 'apply') { ui.tab = 'plan'; ui.sub.plan = 'apply'; }
     else if (g === 'balance') { ui.tab = 'progress'; ui.sub.progress = 'balance'; }
     else if (g === 'convo') { convoModal(); return false; }
@@ -860,7 +891,7 @@ const A = {
     const r = ui.review, c = r.queue[r.i], q = +v;
     rateCard(c, q); r.count++;
     if (q === 0) r.queue.push(c);
-    r.i++; r.flip = false; r.res = null; r.typed = '';
+    r.i++; r.flip = false; r.res = null; r.typed = ''; r.ai = null;
     if (r.i >= r.queue.length) setDone('cards');
   },
   endReview: () => { ui.review = null; },
@@ -901,6 +932,11 @@ const A = {
   openMonth: v => { ui.openMonth = ui.openMonth === +v ? 0 : +v; },
   deliv: v => { S.deliv[v] = ((S.deliv[v] || 0) + 1) % 3; save(); },
   openQ: v => { ui.openQ = ui.openQ === +v ? null : +v; },
+  writeTopic: v => { (S.writing ||= { topic: '', text: '' }).topic = v; save(); },
+  dictateWriting: () => {
+    listenOnce('es-MX', alts => { const w = S.writing ||= { topic: '', text: '' }; let s = alts[0].trim(); s = s.charAt(0).toUpperCase() + s.slice(1); w.text = (w.text ? w.text.trim() + ' ' : '') + s + '.'; save(); render(); });
+    return false;
+  },
   dictate: v => {
     listenOnce('es-MX', alts => { const cur = (S.answers[v] || '').trim(); let s = alts[0].trim(); s = s.charAt(0).toUpperCase() + s.slice(1); S.answers[v] = cur ? cur + ' ' + s : s; save(); render(); });
     return false;
@@ -930,6 +966,7 @@ const A = {
   reset: () => { if (confirm('Tout effacer (cartes, suivi, réglages) ? Les vocaux restent.')) { localStorage.removeItem(KEY); location.reload(); } return false; }
 };
 
+Object.assign(A, window.AI_ACTIONS || {});
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-a]'); if (!el) return;
   const fn = A[el.dataset.a]; if (!fn) return;
@@ -946,6 +983,8 @@ document.addEventListener('input', e => {
   else if (k.startsWith('ans:')) S.answers[k.slice(4)] = v;
   else if (k.startsWith('bal:')) { const wk = weekKey(today()); (S.weekly[wk] ||= { a: [] }).a[+k.slice(4)] = v; }
   else if (k === 'convoTheme') S.convoTheme[weekKey(today())] = v;
+  else if (k.startsWith('ai:')) { const f = k.slice(3); aiS()[f] = f === 'limit' ? Math.max(0, +v || 0) : v; save(); return; }
+  else if (k.startsWith('write:')) { (S.writing ||= { topic: '', text: '' })[k.slice(6)] = v; const wc = $('#wc'); if (wc && k === 'write:text') wc.textContent = v.trim().split(/\s+/).filter(Boolean).length; }
   else if (k.startsWith('set:')) { const f = k.slice(4); S.settings[f] = f === 'newPerDay' ? Math.max(0, +v || 0) : f === 'transcribe' ? v === 'on' : v; save(); if (e.target.tagName === 'SELECT') render(); return; }
   else return;
   save();
@@ -960,6 +999,7 @@ document.addEventListener('input', e => {
   if (e.target.id === 'drillIn' && ui.drill) ui.drill.said = e.target.value;
 });
 document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey && e.target.id === 'chatIn') { e.preventDefault(); A.chatSend(); return; }
   if (e.key === 'Enter' && e.target.id === 'ansIn') { e.preventDefault(); if (A.checkCard() !== false) render(); }
   if (e.key === 'Enter' && e.target.id === 'drillIn') { e.preventDefault(); if (A.drillCheck() !== false) render(); }
   if (e.key === 'Enter' && e.target.id === 'agIn') { A.agencyAdd(); render(); }

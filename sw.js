@@ -1,6 +1,6 @@
 // Hors ligne : réseau d'abord (mises à jour immédiates), cache si pas de connexion.
-const CACHE = 'b1pro-v3';
-const FILES = ['./', 'index.html', 'styles.css', 'data.js', 'pack1.js', 'pack2.js', 'pack3.js', 'pack4.js', 'pack5.js', 'app.js', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png',
+const CACHE = 'b1pro-v4';
+const FILES = ['./', 'index.html', 'styles.css', 'data.js', 'pack1.js', 'pack2.js', 'pack3.js', 'pack4.js', 'pack5.js', 'ai.js', 'app.js', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png',
   'img/hero.jpg', 'img/m1.jpg', 'img/m2.jpg', 'img/m3.jpg', 'img/m4.jpg', 'img/m5.jpg', 'img/m6.jpg', 'img/cards.jpg', 'img/verbs.jpg'];
 
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES))); self.skipWaiting(); });

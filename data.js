@@ -71,7 +71,7 @@ const TASKS = {
   convo:     { min: 20, icon: 'chat', fr: 'Session conversation', es: 'Sesión de conversación', subFr: '« sesión de conversación » + thème de la semaine', subEs: '« sesión de conversación » + tema', go: 'convo' },
   convo2:    { min: 20, icon: 'chat', fr: 'Tandem ou session', es: 'Tándem o sesión', subFr: 'Conversation 2 de la semaine', subEs: 'Conversación 2 de la semana', go: 'convo' },
   series:    { min: 40, icon: 'film', fr: 'Série en VO', es: 'Serie en VO', subFr: 'Bloc long du samedi', subEs: 'Bloque largo del sábado' },
-  writing:   { min: 20, icon: 'pen', fr: 'Écrit de la semaine', es: 'Escrito de la semana', subFr: 'Mail, paragraphe ou CV', subEs: 'Correo, párrafo o CV' },
+  writing:   { min: 20, icon: 'pen', fr: 'Écrit de la semaine', es: 'Escrito de la semana', subFr: 'Mail, paragraphe ou CV', subEs: 'Correo, párrafo o CV', go: 'writing' },
   apply:     { min: 0, icon: 'brief', fr: 'Candidatures', es: 'Postulaciones', subFr: 'Avancer le livrable du mois', subEs: 'Avanzar el entregable del mes', go: 'apply' },
   balance:   { min: 10, icon: 'check', fr: 'Bilan hebdo', es: 'Balance semanal', subFr: 'En espagnol, 5 à 10 lignes', subEs: 'En español, de 5 a 10 líneas', go: 'balance' },
   podcast:   { min: 15, icon: 'head', fr: 'Un podcast (voiture, trajet)', es: 'Un pódcast (carro, trayecto)', subFr: 'N\'importe lequel, l\'important est la chaîne', subEs: 'Cualquiera, lo importante es no romper la cadena' }
