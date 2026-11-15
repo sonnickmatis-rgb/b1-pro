@@ -184,13 +184,15 @@ let esVoice = null;
 // Les voix « gadget » d'iOS (Eddy, Flo, Grandma…) restent muettes dans les applis web : on ne les choisit jamais tout seul.
 const NOVELTY = /Eddy|Flo|Grandma|Grandpa|Reed|Rocko|Sandy|Shelley|Abuel|Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Good News|Jester|Organ|Superstar|Trinoids|Whisper|Wobble|Zarvox|Fred|Junior|Kathy|Ralph/i;
 const GOOD_ES = /Paulina|Juan|Mónica|Monica|Jorge|Diego|Marisol|Angélica|Angelica|Isabela|Carlos|Google español|Microsoft (Dalia|Jorge|Raul|Sabina|Salome|Gonzalo)/i;
+const isHQ = v => /premium|enhanced|am[ée]lior|neural|natural|siri/i.test(v.name + ' ' + v.voiceURI);
 function pickVoice() {
   const vs = speechSynthesis?.getVoices?.() || [];
   const want = S?.settings?.voice;
   if (want) { esVoice = vs.find(v => v.voiceURI === want || v.name === want) || null; return; }
   const es = vs.filter(v => /^es/i.test(v.lang) && !NOVELTY.test(v.name));
-  // Voix connue et fiable, de préférence latino ; sinon aucune voix imposée (l'appareil choisit sa voix espagnole par défaut)
-  esVoice = es.find(v => GOOD_ES.test(v.name) && /MX|US|419|CO/i.test(v.lang)) || es.find(v => GOOD_ES.test(v.name)) || null;
+  const latin = v => /MX|US|419|CO|PE/i.test(v.lang);
+  // 1) voix Premium / améliorée téléchargée, latino ; 2) voix fiable latino ; 3) voix fiable ; sinon voix par défaut de l'appareil
+  esVoice = es.find(v => isHQ(v) && latin(v)) || es.find(v => isHQ(v)) || es.find(v => GOOD_ES.test(v.name) && latin(v)) || es.find(v => GOOD_ES.test(v.name)) || null;
 }
 if ('speechSynthesis' in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
 // Lecture robuste : sur iPhone, un speak() juste après cancel() est souvent ignoré
@@ -291,7 +293,14 @@ function srErrorText(code) {
     'language-not-supported': 'L\'espagnol n\'est pas disponible pour la dictée : ajoute-le dans Réglages → Général → Clavier → Claviers.'
   }[code] || 'Erreur de reconnaissance vocale : ' + code;
 }
-function listenOnce(lang, onText, log) {
+// Bulle flottante qui montre ce que le micro entend, avec un bouton pour arrêter
+function listenPill(text) {
+  let el = $('#listenPill');
+  if (text === null) { el?.remove(); return; }
+  if (!el) { el = document.createElement('div'); el.id = 'listenPill'; el.className = 'listen-pill'; document.body.appendChild(el); }
+  el.innerHTML = `<span class="lp-dot"></span><span class="lp-text">${text ? esc(text) : (langStage() >= 2 ? 'Te escucho…' : 'Je t\'écoute… parle maintenant')}</span><button data-a="listenStop">OK</button>`;
+}
+function listenOnce(lang, onText, log = voiceLog) {
   if (!SR) { modal(`<h3>Micro</h3><p>${isIOS() ? 'La reconnaissance vocale n\'est pas disponible ici. Astuce : utilise la touche micro 🎤 du clavier de l\'iPhone pour dicter dans le champ de texte.' : 'Reconnaissance vocale indisponible sur ce navigateur (essaie Chrome ou Safari).'}</p><button class="btn" data-a="close">OK</button>`); return; }
   try { rec1?.abort(); } catch (e) {}
   try { if (navigator.audioSession) navigator.audioSession.type = 'play-and-record'; } catch (e) {}
@@ -309,6 +318,7 @@ function listenOnce(lang, onText, log) {
     const res = e.results[e.results.length - 1];
     last = [...res].map(x => x.transcript);
     log?.((res.isFinal ? '… final : ' : '… en cours : ') + last[0]);
+    listenPill(last[0]);
     clearTimeout(silence);
     if (res.isFinal) { deliver(last); try { r.stop(); } catch (x) {} }
     // Arrêt après 2,2 s sans nouveau mot (l'iPhone attend sinon ~4 s) : laisse le temps de chercher ses mots
@@ -321,23 +331,26 @@ function listenOnce(lang, onText, log) {
     else setTimeout(() => modal(`<h3>Micro</h3><p>${esc(srErrorText(e.error))}</p><p class="small muted">Code : ${esc(e.error)}</p><div class="row"><button class="btn" data-a="close">OK</button><button class="btn ghost" data-a="goVoiceDiag">Diagnostic</button></div>`), 50);
   };
   r.onend = () => {
-    clearTimeout(silence);
+    clearTimeout(silence); listenPill(null);
     log?.('■ écoute terminée');
     if (!delivered && last.length) deliver(last);
     else if (!delivered && !err) toast(langStage() >= 2 ? 'No reconocí nada, inténtalo otra vez' : 'Rien reconnu : réessaie en parlant juste après avoir touché le micro');
     ui.listening = false; rec1 = null; render();
   };
-  try { r.start(); } catch (e) { ui.listening = false; log?.('✗ démarrage impossible : ' + e.message); toast('Micro : ' + e.message); render(); }
+  try { r.start(); listenPill(''); } catch (e) { ui.listening = false; log?.('✗ démarrage impossible : ' + e.message); toast('Micro : ' + e.message); render(); }
 }
 // Transcription continue pendant le vocal de 2 min
-function startTranscript(state) {
+function startTranscript(state, log) {
   if (!SR) return;
   state.text = []; state.live = true;
   try { if (navigator.audioSession) navigator.audioSession.type = 'play-and-record'; } catch (e) {}
+  log?.('Vocal : transcription démarrée');
   const go = () => {
     if (!state.live) return;
     const r = new SR(); state.sr = r;
     r.lang = 'es-MX'; r.continuous = true; r.interimResults = true;
+    r.onaudiostart = () => log?.('● vocal : micro ouvert pour la transcription');
+    r.onspeechstart = () => log?.('● vocal : voix détectée');
     r.onresult = e => {
       let interim = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -347,9 +360,9 @@ function startTranscript(state) {
       state.pending = interim.trim();
       const el = document.querySelector('#liveTx'); if (el) el.textContent = (state.text.join(' ') + ' ' + interim).trim();
     };
-    r.onerror = e => { if (e.error === 'not-allowed' || e.error === 'service-not-allowed') state.live = false; };
-    r.onend = () => { if (state.pending) { state.text.push(state.pending); state.pending = ''; } if (state.live) setTimeout(go, 150); };
-    try { r.start(); } catch (e) { state.live = false; }
+    r.onerror = e => { log?.('✗ vocal : erreur ' + e.error); if (['not-allowed', 'service-not-allowed', 'audio-capture'].includes(e.error)) state.live = false; };
+    r.onend = () => { if (state.pending) { state.text.push(state.pending); state.pending = ''; } log?.('■ vocal : écoute terminée (' + state.text.join(' ').split(/\s+/).filter(Boolean).length + ' mots)' + (state.live ? ', redémarrage' : '')); if (state.live) setTimeout(go, 150); };
+    try { r.start(); } catch (e) { state.live = false; log?.('✗ vocal : démarrage impossible ' + e.message); }
   };
   go();
 }
@@ -603,9 +616,11 @@ function vVocal() {
   const r = ui.rec, m = monthOf(today());
   const byMonth = {};
   VOCALS.forEach(v => (byMonth[monthOf(v.date).id] ||= []).push(v));
-  const first = VOCALS[0];
+  const first = VOCALS.find(x => x.blob);
   return `
   <p class="small muted" style="margin-top:0">${t('rec_hint')}</p>
+  <div class="chips" style="justify-content:center;margin-bottom:6px">${[['both', langStage() >= 2 ? 'Audio + texto' : 'Audio + texte'], ['audio', langStage() >= 2 ? 'Solo audio' : 'Audio seul'], ['text', langStage() >= 2 ? 'Solo texto' : 'Texte seul']].map(([k, l]) => `<button class="chip ${vocalMode() === k ? 'on' : ''}" data-a="vocalMode" data-v="${k}" ${r ? 'disabled' : ''}>${l}</button>`).join('')}</div>
+  ${isIOS() && vocalMode() === 'both' ? `<p class="small muted" style="text-align:center;margin:0 0 4px">${langStage() >= 2 ? 'En iPhone, si no aparece el texto, usa «Solo texto».' : 'Sur iPhone, si le texte n\'apparaît pas, passe en « Texte seul ».'}</p>` : ''}
   <div class="big-time">${r ? fmt(Math.max(0, 120 - r.elapsed)) : '2:00'}</div>
   <button class="rec-btn ${r ? 'on' : ''}" data-a="${r ? 'recStop' : 'recStart'}">${r ? I.stop : I.mic}</button>
   <p class="small muted" style="text-align:center;margin:6px 0 0">${r ? t('stop') : t('start')}</p>
@@ -616,7 +631,7 @@ function vVocal() {
   <h3>${t('my_vocals')}</h3>
   ${Object.keys(byMonth).length ? Object.keys(byMonth).sort((a, b) => b - a).map(k => `<p class="eyebrow gap-l">${langStage() >= 1 ? 'Mes' : 'Mois'} ${k} · ${byMonth[k].length}</p>${byMonth[k].slice().reverse().map((v, i, arr) => `
       <div class="list-item row"><div class="grow"><div style="font-weight:600">${esc(parse(v.date).toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' }))} ${i === arr.length - 1 ? `<span class="tag" style="background:var(--sage);color:var(--sage-ink)">${t('reference')}</span>` : ''}</div><div class="small muted">${fmt(v.dur)}${v.nw ? ` · ${v.nw} ${langStage() >= 2 ? 'palabras' : 'mots'} · ${v.wpm}/min` : ''}${v.words?.length ? ' · ' + esc(v.words.join(', ')) : ''}</div></div>
-      <button class="icon-btn" data-a="play" data-v="${v.id}">${I.play}</button><button class="icon-btn" data-a="vocalDel" data-v="${v.id}">${I.x}</button></div>
+      ${v.blob ? `<button class="icon-btn" data-a="play" data-v="${v.id}">${I.play}</button>` : '<span class="tag" style="background:var(--soft)">texte</span>'}<button class="icon-btn" data-a="vocalDel" data-v="${v.id}">${I.x}</button></div>
       ${v.tx ? `<details class="small" style="margin:-4px 0 6px"><summary class="muted">${langStage() >= 2 ? 'Ver transcripción' : 'Voir la transcription'}</summary><p style="margin:6px 0 0">${esc(v.tx)}</p>${hasKey() ? `<button class="btn sm sage" style="margin-top:6px" data-a="aiCorrectVocal" data-v="${v.id}">✨ ${langStage() >= 2 ? 'Corregir' : 'Corriger'}</button>` : ''}</details>` : ''}`).join('')}`).join('') : `<div class="empty">${langStage() >= 2 ? 'Aún no hay audios.' : 'Pas encore de vocal.'}</div>`}
   <div id="player"></div>`;
 }
@@ -789,7 +804,13 @@ function vVoiceDiag() {
   </div>
   <label class="field" style="margin-bottom:10px"><span>Voix de lecture</span><select data-in="set:voice">
     <option value="" ${!S.settings.voice ? 'selected' : ''}>Automatique (voix espagnole de l'appareil)</option>
-    ${es.map(v => `<option value="${esc(v.voiceURI)}" ${S.settings.voice === v.voiceURI ? 'selected' : ''}>${esc(v.name)} · ${esc(v.lang)}${NOVELTY.test(v.name) ? ' (gadget, souvent muette)' : ''}</option>`).join('')}</select></label>
+    ${es.map(v => `<option value="${esc(v.voiceURI)}" ${S.settings.voice === v.voiceURI ? 'selected' : ''}>${esc(v.name)} · ${esc(v.lang)}${isHQ(v) ? ' · ★ haute qualité' : ''}${NOVELTY.test(v.name) ? ' (gadget, souvent muette)' : ''}</option>`).join('')}</select></label>
+  <details class="soft small" style="margin-bottom:10px"><summary><b>Avoir une voix plus naturelle (gratuit)</b></summary>
+    <ol style="padding-left:18px;margin:8px 0 0">
+      <li>iPhone : Réglages → Accessibilité → <b>Contenu énoncé</b> → <b>Voix</b> → Espagnol (Mexique)</li>
+      <li>Touche <b>Paulina</b> (ou Juan) et télécharge la version <b>Premium</b> ou <b>Améliorée</b> (quelques centaines de Mo, en wifi)</li>
+      <li>Ferme complètement l'appli, rouvre-la, puis choisis la voix marquée ★ dans la liste ci-dessus</li>
+    </ol></details>
   <p class="small muted" style="margin:-4px 0 10px">Voix utilisée : ${esVoice ? esc(esVoice.name) : 'celle de l\'appareil pour es-MX'}</p>
   <div class="row wrap" style="gap:8px"><button class="btn sm" data-a="voiceTestSpeak">${I.speak} Tester la lecture</button><button class="btn sm" data-a="voiceTestMic">${I.mic} Tester le micro</button>${(ui.voiceLog || []).length ? '<button class="btn sm ghost" data-a="voiceLogClear">Effacer</button>' : ''}</div>
   <pre id="voiceLog" class="soft small" style="white-space:pre-wrap;margin:10px 0 0;min-height:44px;font-family:ui-monospace,Menlo,monospace;font-size:12px">${esc((ui.voiceLog || []).join('\n')) || 'Le journal du test s\'affichera ici.'}</pre>
@@ -889,38 +910,56 @@ setInterval(() => {
 }, 500);
 
 // ---------- Enregistrement ----------
+// Modes : 'both' (audio + texte), 'audio' (audio seul), 'text' (texte seul, le plus fiable sur iPhone)
+const vocalMode = () => S.settings.vocalMode || 'both';
 async function recStart() {
-  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return toast(t('mic_err'));
-  let stream;
-  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch (e) { return modal(`<h3>Micro</h3><p>${t('mic_err')}</p><button class="btn" data-a="close">OK</button>`); }
-  const mime = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'].find(m => MediaRecorder.isTypeSupported?.(m)) || '';
-  const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
+  const mode = vocalMode();
+  const wantTx = mode !== 'audio' && canListen && S.settings.transcribe !== false;
+  const wantAudio = mode !== 'text';
+  if (mode === 'text' && !canListen) return modal(`<h3>Micro</h3><p>La transcription n'est pas disponible ici : choisis « Audio seul ».</p><button class="btn" data-a="close">OK</button>`);
+  if (wantAudio && (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder)) return toast(t('mic_err'));
+  const tx = {};
+  // La transcription démarre d'abord, directement dans le geste du toucher (sinon Safari la bloque)
+  if (wantTx) { try { startTranscript(tx, voiceLog); } catch (e) { voiceLog('✗ transcription : ' + e.message); } }
+  let stream = null, mr = null;
   const chunks = [];
-  mr.ondataavailable = e => e.data.size && chunks.push(e.data);
-  mr.onstop = async () => {
-    stream.getTracks().forEach(tr => tr.stop());
-    const r = ui.rec; ui.rec = null; clearInterval(r.iv);
-    const tx = stopTranscript(r.tx);
-    const dur = Math.min(120, (Date.now() - r.t0) / 1000);
-    if (dur < 2) { render(); return; }
-    const nw = tx ? tx.split(/\s+/).filter(Boolean).length : 0;
-    const v = { id: uid(), date: today(), ts: Date.now(), dur, mime: mr.mimeType, blob: new Blob(chunks, { type: mr.mimeType }), words: [], tx, nw, wpm: nw ? Math.round(nw / (dur / 60)) : 0 };
-    try { await idb.put(v); VOCALS.push(v); } catch (e) { toast('Erreur de sauvegarde'); }
-    setDone('vocal'); render();
-    modal(`<h3>${t('missing_words')}</h3><p class="small muted">${langStage() >= 3 ? 'Irán a «Por convertir en tarjetas».' : 'Ils iront dans « À transformer en cartes » pour demain.'}</p>
-      <div class="stack"><input type="text" id="w0" placeholder="1"><input type="text" id="w1" placeholder="2"><input type="text" id="w2" placeholder="3"></div>
-      <div class="row gap-l"><button class="btn grow" data-a="saveWords" data-v="${v.id}">${t('save')}</button><button class="btn ghost" data-a="close">${langStage() >= 2 ? 'Omitir' : 'Passer'}</button></div>`);
-  };
-  mr.start(1000);
-  ui.rec = { mr, t0: Date.now(), elapsed: 0, tx: {} };
-  if (canListen && S.settings.transcribe !== false) { try { startTranscript(ui.rec.tx); } catch (e) {} }
+  if (wantAudio) {
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch (e) { stopTranscript(tx); return modal(`<h3>Micro</h3><p>${t('mic_err')}</p><button class="btn" data-a="close">OK</button>`); }
+    const mime = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'].find(m => MediaRecorder.isTypeSupported?.(m)) || '';
+    mr = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
+    mr.ondataavailable = e => e.data.size && chunks.push(e.data);
+    mr.start(1000);
+  }
+  ui.rec = { mr, stream, chunks, t0: Date.now(), elapsed: 0, tx, wantTx };
   ui.rec.iv = setInterval(() => {
     if (!ui.rec) return;
     ui.rec.elapsed = (Date.now() - ui.rec.t0) / 1000;
-    if (ui.rec.elapsed >= 120) { ui.rec.mr.stop(); return; }
+    if (ui.rec.elapsed >= 120) { recFinish(); return; }
     const bt = document.querySelector('.big-time'); if (bt) bt.textContent = fmt(Math.max(0, 120 - ui.rec.elapsed));
   }, 250);
   render();
+}
+function recFinish() {
+  const r = ui.rec; if (!r) return;
+  ui.rec = null; clearInterval(r.iv);
+  const done = async () => {
+    r.stream?.getTracks().forEach(tr => tr.stop());
+    const txt = stopTranscript(r.tx);
+    const dur = Math.min(120, (Date.now() - r.t0) / 1000);
+    if (dur < 2) { render(); return; }
+    const nw = txt ? txt.split(/\s+/).filter(Boolean).length : 0;
+    const mime = r.mr?.mimeType || '';
+    const v = { id: uid(), date: today(), ts: Date.now(), dur, mime, blob: r.chunks.length ? new Blob(r.chunks, { type: mime }) : null, words: [], tx: txt, nw, wpm: nw ? Math.round(nw / (dur / 60)) : 0 };
+    try { await idb.put(v); VOCALS.push(v); } catch (e) { toast('Erreur de sauvegarde'); }
+    setDone('vocal'); render();
+    const noTx = r.wantTx && !txt;
+    modal(`${noTx ? `<div class="banner warn" style="margin-bottom:14px">Aucun texte n'a été transcrit. ${isIOS() && vocalMode() === 'both' ? 'Sur iPhone, l\'audio et la transcription se gênent souvent : essaie le mode <b>« Texte seul »</b>.' : 'Regarde le journal dans Suivi → Réglages → Voix.'}</div>` : ''}
+      <h3>${t('missing_words')}</h3><p class="small muted">${langStage() >= 3 ? 'Irán a «Por convertir en tarjetas».' : 'Ils iront dans « À transformer en cartes » pour demain.'}</p>
+      <div class="stack"><input type="text" id="w0" placeholder="1"><input type="text" id="w1" placeholder="2"><input type="text" id="w2" placeholder="3"></div>
+      <div class="row gap-l"><button class="btn grow" data-a="saveWords" data-v="${v.id}">${t('save')}</button><button class="btn ghost" data-a="close">${langStage() >= 2 ? 'Omitir' : 'Passer'}</button></div>`);
+  };
+  if (r.mr && r.mr.state !== 'inactive') { r.mr.onstop = done; r.mr.stop(); } else done();
 }
 let playing;
 function play(id) {
@@ -1007,7 +1046,9 @@ const A = {
   drillNext: () => { ui.drill.n++; if (ui.drill.n === 5) { setDone('drill'); toast('✓ 5/5'); } newDrill(); },
   drillTable: () => { ui.drill.table = !ui.drill.table; },
   recStart: () => { recStart(); return false; },
-  recStop: () => { ui.rec?.mr.stop(); return false; },
+  recStop: () => { recFinish(); return false; },
+  listenStop: () => { try { rec1?.stop(); } catch (e) {} return false; },
+  vocalMode: v => { S.settings.vocalMode = v; save(); },
   play: v => { play(v); return false; },
   vocalDel: async v => { if (!confirm(t('delete') + ' ?')) return false; await idb.del(v); VOCALS = VOCALS.filter(x => x.id !== v); render(); return false; },
   saveWords: v => {
